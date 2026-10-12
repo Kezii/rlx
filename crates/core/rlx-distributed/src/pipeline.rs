@@ -23,7 +23,7 @@
 //! before dropping the group, so no rank tears down its transport while a
 //! peer is still mid-transfer.
 
-use crate::partition::{BlockRole, block_role};
+use crate::partition::{BlockRole, LayerSplit, block_role};
 use anyhow::{Result, bail};
 use rlx_driver::ProcessGroup;
 
@@ -75,6 +75,30 @@ pub trait BlockRunner {
     fn run(&mut self, input: BlockInput<'_>) -> Result<BlockOutput>;
 }
 
+/// Per-step choices for [`PipelineCoordinator::forward_step_with`].
+#[derive(Debug, Clone, Copy)]
+pub struct StepOptions {
+    /// Give up on the next block's hidden state after this long. `None`
+    /// waits forever, which is only right for a rank waiting on its leader.
+    pub timeout: Option<std::time::Duration>,
+    /// Broadcast the sampled token to every rank at the end of the step.
+    ///
+    /// Right for [`PipelineCoordinator::generate`], where the broadcast *is* how the other
+    /// ranks learn the token. Wrong for a caller that samples above the
+    /// pipeline and tells the other ranks itself — there it is a second
+    /// message saying what the first already said.
+    pub broadcast_token: bool,
+}
+
+impl Default for StepOptions {
+    fn default() -> Self {
+        Self {
+            timeout: None,
+            broadcast_token: true,
+        }
+    }
+}
+
 /// Drives pipeline-parallel forward passes over a process group.
 pub struct PipelineCoordinator {
     group: ProcessGroup,
@@ -117,6 +141,49 @@ impl PipelineCoordinator {
         token_ids: &[u32],
         sample: impl FnOnce(&[f32]) -> u32,
     ) -> Result<u32> {
+        self.forward_step_within(runner, token_ids, sample, None)
+    }
+
+    /// As [`Self::forward_step`], but giving up if the next block's hidden
+    /// state does not arrive within `timeout`.
+    ///
+    /// Worth using on the rank that is serving requests. A machine that was
+    /// unplugged, slept, or lost its network does not close its sockets, so
+    /// a plain receive on it waits forever — and a server blocked forever on
+    /// a peer looks to its client exactly like a model that is thinking.
+    /// With a bound it becomes an error that names the rank that went quiet.
+    ///
+    /// Only the hidden-state receive is bounded. A rank waiting on the one
+    /// *above* it in the chain is waiting on the leader, which is idle
+    /// between requests by design — timing that out would end the job every
+    /// time nobody asked anything for a while.
+    pub fn forward_step_within(
+        &self,
+        runner: &mut dyn BlockRunner,
+        token_ids: &[u32],
+        sample: impl FnOnce(&[f32]) -> u32,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<u32> {
+        self.forward_step_with(
+            runner,
+            token_ids,
+            sample,
+            StepOptions {
+                timeout,
+                broadcast_token: true,
+            },
+        )
+    }
+
+    /// As [`Self::forward_step`], with the per-step choices spelled out.
+    pub fn forward_step_with(
+        &self,
+        runner: &mut dyn BlockRunner,
+        token_ids: &[u32],
+        sample: impl FnOnce(&[f32]) -> u32,
+        opts: StepOptions,
+    ) -> Result<u32> {
+        let timeout = opts.timeout;
         let world = self.group.world_size();
         let rank = self.group.rank();
 
@@ -140,21 +207,43 @@ impl PipelineCoordinator {
                 self.group.send_f32(rank - 1, TAG_PIPE_HIDDEN, &hidden)?;
             }
             BlockRole::Middle => {
-                let hidden_in = self.group.recv_f32(rank + 1, TAG_PIPE_HIDDEN)?;
+                let hidden_in = self.recv_hidden(rank + 1, timeout)?;
                 let hidden = runner.run(BlockInput::Hidden(&hidden_in))?.into_hidden()?;
                 self.group.send_f32(rank - 1, TAG_PIPE_HIDDEN, &hidden)?;
             }
             BlockRole::Last => {
-                let hidden_in = self.group.recv_f32(rank + 1, TAG_PIPE_HIDDEN)?;
+                let hidden_in = self.recv_hidden(rank + 1, timeout)?;
                 let logits = runner.run(BlockInput::Hidden(&hidden_in))?.into_logits()?;
                 sampled = Some(sample(&logits));
             }
         }
 
         // Broadcast the token from rank 0 (the Last/Single block) to all.
+        if !opts.broadcast_token {
+            // The caller moves the token itself, so this would be a second
+            // message carrying what the first already said. One extra
+            // round trip per token is nothing on a cable and the dominant
+            // cost over a relayed WAN link, where it doubles the per-token
+            // latency.
+            return Ok(sampled.unwrap_or(0));
+        }
         let mut tok = [sampled.unwrap_or(0) as f32];
         self.group.broadcast(0, &mut tok)?;
         Ok(tok[0] as u32)
+    }
+
+    /// Take the hidden state from `from`, optionally bounded.
+    fn recv_hidden(&self, from: u32, timeout: Option<std::time::Duration>) -> Result<Vec<f32>> {
+        match timeout {
+            None => Ok(self.group.recv_f32(from, TAG_PIPE_HIDDEN)?),
+            Some(t) => match self.group.recv_f32_timeout(from, TAG_PIPE_HIDDEN, t)? {
+                Some(h) => Ok(h),
+                None => bail!(
+                    "rank {from} did not send its hidden state within {t:?}: \
+                     that machine has stopped responding"
+                ),
+            },
+        }
     }
 
     /// Generate up to `max_tokens`, appending each sampled token to
@@ -183,6 +272,45 @@ impl PipelineCoordinator {
         }
         self.barrier()?;
         Ok(tokens[start..].to_vec())
+    }
+}
+
+impl LayerSplit {
+    /// Check that every rank in `group` was given this same division.
+    ///
+    /// Worth a round trip before loading any weights, because this is the
+    /// one disagreement the rest of the design cannot catch. A rank's share
+    /// of the layers decides which weights it reads and how many layers its
+    /// graph has, and any share is internally consistent: two ranks given
+    /// different divisions both load, both compile, and both run. The
+    /// pipeline then puts some layer through twice and skips another, every
+    /// shape agreeing, and answers plausible nonsense with nothing
+    /// anywhere to say so.
+    ///
+    /// Compares [`LayerSplit::fingerprint`] rather than the counts, so one
+    /// all-gather of a single number settles it however many ranks there
+    /// are. Every rank learns of a disagreement, not just rank 0 — a rank
+    /// that stayed silent would sit waiting for peers that have already
+    /// given up.
+    pub fn agree(&self, group: &ProcessGroup) -> Result<()> {
+        let mine = self.fingerprint();
+        let all = group.all_gather(&[mine as f32])?;
+        let disagree: Vec<String> = all
+            .iter()
+            .enumerate()
+            .filter(|&(_, f)| *f as u32 != mine)
+            .map(|(rank, f)| format!("rank {rank} has {:#08x}", *f as u32))
+            .collect();
+        if !disagree.is_empty() {
+            bail!(
+                "the ranks were given different layer splits — this rank has \
+                 {mine:#08x}, {}. Every rank needs the same division; without \
+                 it the model would run some layers twice and others never, \
+                 and answer nonsense with nothing to show it.",
+                disagree.join(", ")
+            );
+        }
+        Ok(())
     }
 }
 
@@ -263,6 +391,49 @@ mod tests {
         for h in handles {
             h.join().unwrap();
         }
+    }
+
+    #[test]
+    fn ranks_given_the_same_split_agree() {
+        run_group(3, |group| {
+            let split = LayerSplit::even(30, 3);
+            split.agree(&group).expect("a split every rank shares");
+        });
+    }
+
+    #[test]
+    fn a_rank_given_a_different_split_is_caught_on_every_rank() {
+        // The failure this exists for, and the reason every rank has to
+        // hear about it: a rank that noticed nothing would wait for peers
+        // that have already failed and gone.
+        run_group(3, |group| {
+            let split = if group.rank() == 1 {
+                LayerSplit::parse("5,20,5").unwrap()
+            } else {
+                LayerSplit::even(30, 3)
+            };
+            let err = split
+                .agree(&group)
+                .expect_err("rank 1 holds a different division")
+                .to_string();
+            assert!(
+                err.contains("different layer splits"),
+                "rank {}: {err}",
+                group.rank()
+            );
+        });
+    }
+
+    #[test]
+    fn an_uneven_split_still_agrees_with_itself() {
+        // 28 across 3 does not divide, and the remainder convention is the
+        // thing most likely to differ between two ways of computing the
+        // same split.
+        run_group(3, |group| {
+            let split = LayerSplit::even(28, 3);
+            assert_eq!(split.counts, vec![9, 9, 10]);
+            split.agree(&group).expect("one function, one answer");
+        });
     }
 
     fn run_pipeline_case(world: u32, num_layers: usize, hidden: usize, token: u32) {

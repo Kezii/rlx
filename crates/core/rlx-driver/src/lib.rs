@@ -52,6 +52,7 @@ pub use handle::BufferHandle;
 #[cfg(feature = "iroh")]
 pub use iroh_transport::{
     IrohPeer, IrohTransport, RLX_PIPELINE_ALPN, RelayMap, RelayMode, process_group_from_env,
+    seeded_peers, seeded_secret,
 };
 #[cfg(feature = "mpi")]
 pub use mpi_transport::MpiTransport;

@@ -1,3 +1,7 @@
+// RLX — versatile ML compiler + runtime.
+// Copyright (C) 2026 Eugene Hauptmann, Nataliya Kosmyna.
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Gradient checkpointing must change memory, not answers.
 //!
 //! Both halves matter. A pass that produces identical gradients but saves

@@ -255,6 +255,14 @@ def render_from_registry(entries: dict[str, dict], leftovers: dict[str, set[str]
             "Add new names to `env_registry_data.inc.rs`. Unregistered "
             "`env::flag(\"RLX_…\")` call sites fail `just check-rlx-env-vars`.",
             "",
+            # `scripts/add_license_headers.py` requires this footer on every
+            # markdown doc. Rendering it here keeps the two tools agreeing:
+            # without it the generator stripped the footer, the license script
+            # put it back, and `--check` then reported the doc out of date.
+            "## License",
+            "",
+            "MIT OR Apache-2.0.",
+            "",
         ]
     )
     return "\n".join(lines)

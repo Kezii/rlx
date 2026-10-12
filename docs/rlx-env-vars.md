@@ -13,22 +13,22 @@ semantics. Curated Public list: `just env-catalog`.
 | Internal | Bench / tooling |
 | Deprecated | Use replace_with |
 
-**Registered names:** 626  
-**Unregistered mentions (migration leftovers):** 136
+**Registered names:** 642  
+**Unregistered mentions (migration leftovers):** 137
 
 ## Groups
 
 - [compile](#compile) — 22
 - [coreml](#coreml) — 14
-- [cpu](#cpu) — 29
+- [cpu](#cpu) — 31
 - [cuda](#cuda) — 70
-- [debug](#debug) — 12
+- [debug](#debug) — 13
 - [device](#device) — 4
 - [egpu](#egpu) — 6
 - [fft](#fft) — 10
 - [gpu](#gpu) — 4
 - [gpu-host](#gpu-host) — 1
-- [metal](#metal) — 184
+- [metal](#metal) — 191
 - [misc](#misc) — 97
 - [mlx](#mlx) — 20
 - [oneapi](#oneapi) — 5
@@ -38,8 +38,8 @@ semantics. Curated Public list: `just env-catalog`.
 - [rocm](#rocm) — 31
 - [tpu](#tpu) — 4
 - [vulkan](#vulkan) — 19
-- [wgpu](#wgpu) — 77
-- [xdna](#xdna) — 10
+- [wgpu](#wgpu) — 82
+- [xdna](#xdna) — 11
 
 ## compile
 
@@ -96,6 +96,7 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_ARENA_NO_REUSE` | Bisect | Bool | Backend(cpu) | Give every tensor its own arena slot; disables slot reuse |
 | `RLX_ARENA_WRITE_TRACE` | Bisect | Bool | Backend(cpu) | Log the arena byte range each CPU thunk dirties (finds slot aliasing/overruns) |
 | `RLX_ATTN_BWD_SERIAL` | Internal | String | Backend(cpu) | Run CPU attention backward serially instead of with Rayon |
+| `RLX_BLAS_ALIAS_CHECK` | Bisect | Bool | Backend(cpu) | Panic when a BLAS operand overlaps its destination (finds arena slot aliasing) |
 | `RLX_BLAS_LINK` | Internal | String | Backend(cpu) | Escape hatch naming the BLAS/LAPACK libraries to link |
 | `RLX_BLAS_SEARCH` | Internal | String | Backend(cpu) | Extra directories searched for the RLX_BLAS_LINK libraries |
 | `RLX_CPU_ARENA_REPORT` | Internal | Bool | Backend(cpu) | Attribute the CPU arena's resident bytes to the nodes holding them |
@@ -115,6 +116,7 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_DEQUANT_PARALLEL` | Internal | String | Backend(cpu) | Dequantize GGUF blocks in parallel; set 0 to serialize |
 | `RLX_FAST_CONV` | Public | BoolOr | Backend(cpu) | CPU Conv2d im2col+BLAS path (default on; set 0 for scalar nested loops) |
 | `RLX_PAR_THRESHOLD` | Bisect | U64 | Backend(cpu) | Minimum element count before an op dispatches in parallel |
+| `RLX_Q4K_EXACT_GEMV` | Internal | Bool | Backend(cpu) | Q4_K decode GEMV dequantizes to f32 per block instead of quantizing the activation to Q8_K (exact, slower) |
 | `RLX_Q4K_FUSED_MIN_N` | Internal | String | Backend(cpu) | n above which the fused Q4_K kernel is used instead of dequant |
 | `RLX_Q4K_NO_DOTPROD` | Internal | String | Backend(cpu) | Force the baseline Q4_K path instead of the dotprod intrinsics |
 | `RLX_SDPA_THRESHOLD` | Bisect | U64 | Backend(cpu) | Sequence length above which SDPA switches from NEON dots to BLAS sgemm |
@@ -211,6 +213,7 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_DISPATCH_REPORT` | Public | Bool | Compile | Print legalize/dispatch report during compile (1 = on) |
 | `RLX_ENV_DEPRECATIONS` | Public | Bool | Runtime | Emit one-shot messages when deprecated RLX_* aliases are used |
 | `RLX_REQUIRE_DEVICE` | Public | Bool | Tooling | Make a missing GPU a test FAILURE instead of a silent skip (rig runs) |
+| `RLX_SHOW_VALS` | Internal | Bool | Tooling | Print the first mismatching values when a parity test reports a bad case |
 | `RLX_VERBOSE` | Public | Bool | Runtime | Extra runtime logging |
 
 ## device
@@ -361,6 +364,8 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_METAL_NO_FUSION` | Bisect | Bool | Backend(metal) | Skip every Metal pattern fusion |
 | `RLX_METAL_NO_SGEMM64` | Bisect | Bool | Backend(metal) | Disable the default 64x64-tile Simd64 sgemm (fall back to Simd4x4) for aligned tall/short-K matmuls. |
 | `RLX_METAL_NO_SHARE` | Bisect | Bool | Backend(metal) | Disable sharing parameter buffers between compiled graphs |
+| `RLX_METAL_NO_SMALL_M_MPS` | Bisect | Bool | Backend(metal) | Opt out of routing small 8-unaligned m against a square operator to MPS |
+| `RLX_METAL_NO_WEIGHT_SPLIT` | Bisect | Bool | Backend(metal) | Keep one arena: disable the share-driven split of large F32/F16 params |
 | `RLX_METAL_ONNX_QMATMUL_GPU` | Bisect | Bool | Backend(metal) | Run ONNX quantized matmul on the GPU; set 0 to host it |
 | `RLX_METAL_ONNX_QMATMUL_MIN_FLOPS` | Bisect | U64 | Backend(metal) | FLOP threshold above which ONNX qmatmul goes to the GPU |
 | `RLX_METAL_OUTPUT_TRACE` | Bisect | Bool | Backend(metal) | Trace each graph output read back from Metal |
@@ -373,6 +378,9 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_METAL_PREFILL_FA_MMA` | Internal | String | Backend(metal) | Opt in to the MMA flash-attention prefill kernel |
 | `RLX_METAL_PREFILL_HD256` | Internal | String | Backend(metal) | Head-dim-256 prefill kernel; set 0 to disable |
 | `RLX_METAL_PREFILL_TRACE` | Internal | Bool | Backend(metal) | Trace Metal prefill matmul dispatches (m > 1) |
+| `RLX_METAL_PTQ1_0_FUSED_DISABLE` | Bisect | Bool | Backend(metal) | Disable the fused PTQ1_0 decode GEMV and dequantize to a scratch buffer first |
+| `RLX_METAL_PTQ1_0_INT_PIPE` | Bisect | Bool | Backend(metal) | Use the integer-accumulate PTQ1_0 simdgroup GEMV instead of the float one |
+| `RLX_METAL_PTQ1_0_NSG` | Bisect | U64 | Backend(metal) | Simdgroups per threadgroup for the PTQ1_0 decode GEMV (default 2, clamped to 1..=8) |
 | `RLX_METAL_Q1_0_FUSED_DISABLE` | Bisect | Bool | Backend(metal) | Disable the fused Q1_0 matmul kernel |
 | `RLX_METAL_Q1_0_SG_DISABLE` | Bisect | Bool | Backend(metal) | Disable the simdgroup Q1_0 kernel |
 | `RLX_METAL_Q1_DUAL_DISABLE` | Bisect | Bool | Backend(metal) | Disable the dual-output Q1 decode kernel |
@@ -419,6 +427,7 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_METAL_SGEMM_PRECISE` | Bisect | Bool | Backend(metal) | Force the scalar fp32 sgemm path for precision-critical work |
 | `RLX_METAL_SGEMM_SPLITK` | Bisect | Bool | Backend(metal) | Enable the split-K 64x64 sgemm for fat-K/small-MN shapes (dW=xT.dq); atomic-accumulate into a pre-zeroed C. |
 | `RLX_METAL_SGEMM_VARIANT` | Bisect | Enum | Backend(metal) | Pin one Metal sgemm variant for an A/B (refused where ineligible) |
+| `RLX_METAL_SMALL_M_MPS_TRACE` | Bisect | Bool | Backend(metal) | Log each shape the small-m MPS rule routes to MPS |
 | `RLX_METAL_SOFTMAX_TRACE` | Bisect | Bool | Backend(metal) | Trace softmax kernel selection |
 | `RLX_METAL_SSM_CPU` | Bisect | Bool | Backend(metal) | Run the SSM recurrence on the CPU instead of Metal |
 | `RLX_METAL_SSM_HOST_FALLBACK` | Bisect | Bool | Backend(metal) | Run the SSM recurrence on the host instead of Metal |
@@ -438,6 +447,7 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_METAL_W8A8_KMODE` | Internal | String | Backend(metal) | W8A8 K source: i8 (default) or f32 for diagnostic isolation |
 | `RLX_METAL_W8A8_QMODE` | Internal | String | Backend(metal) | W8A8 Q source: i8 integer dot (default) or f32 |
 | `RLX_METAL_W8A8_VMODE` | Internal | String | Backend(metal) | W8A8 V source: i8 (default) or f32 to isolate K error |
+| `RLX_METAL_WEIGHT_SPLIT_MIN` | Bisect | U64 | Backend(metal) | Byte threshold of large F32/F16 params that triggers the weight split (default 512 MiB) |
 | `RLX_METAL_WIDE_GEMM` | Internal | Bool | Backend(metal) | Force the wide GEMM path wherever M makes it eligible |
 | `RLX_MPSGRAPH_FORCE` | Bisect | Bool | Backend(metal) | Force this op through MPSGraph regardless of the cost model |
 | `RLX_MPSGRAPH_MIN_FLOPS` | Bisect | U64 | Backend(metal) | FLOP threshold above which MPSGraph is used |
@@ -700,6 +710,7 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_WGPU_COOP_F16_VK_NO_AUTO_WIDE` | Bisect | Bool | Backend(wgpu) | Disable automatic selection of the wide cooperative tile |
 | `RLX_WGPU_COOP_F16_VK_NO_F32ACC` | Bisect | Bool | Backend(wgpu) | Accumulate cooperative f16 matmul in f16 instead of f32 |
 | `RLX_WGPU_COOP_F16_VK_OSC_THRESH` | Bisect | Bool | Backend(wgpu) | Oscillation threshold for cooperative tile selection (default 0.35) |
+| `RLX_WGPU_COOP_PROBE_VERBOSE` | Bisect | Bool | Backend(wgpu) | Print each cooperative-matrix self-check's zero count, max delta and verdict |
 | `RLX_WGPU_DBG_COUNTERS` | Internal | Bool | Backend(wgpu) | Print step/host/uniform/bind-group counters |
 | `RLX_WGPU_DBG_HOST_OP` | Internal | Bool | Backend(wgpu) | Log each op routed to the host fallback |
 | `RLX_WGPU_DBG_INT8_HOST` | Internal | Bool | Backend(wgpu) | Log the host int8 dequant-matmul path |
@@ -717,6 +728,7 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_WGPU_DUMP_TAIL` | Bisect | Bool | Backend(wgpu) | Dump the tail of each buffer rather than the head |
 | `RLX_WGPU_EXPAND_HOST` | Internal | Bool | Backend(wgpu) | Run Expand on the host instead of a wgpu kernel |
 | `RLX_WGPU_F16_WEIGHTS` | Bisect | Bool | Backend(wgpu) | Store wgpu weights in f16 to halve weight bandwidth |
+| `RLX_WGPU_FEED_TRACE` | Bisect | Bool | Backend(wgpu) | Trace GPU-handle feed wiring and per-step input staging |
 | `RLX_WGPU_FORCE_COOP_F32` | Bisect | Bool | Backend(wgpu) | Force f32 cooperative matrices (unreliable on RTX, which lacks 8x8 f32) |
 | `RLX_WGPU_FORCE_HOST` | Internal | Bool | Backend(wgpu) | Host every op, reproducing discrete-adapter behaviour on any adapter |
 | `RLX_WGPU_FORCE_INPUT_UPLOAD` | Bisect | Bool | Backend(wgpu) | Re-upload graph inputs every run instead of reusing device copies |
@@ -738,6 +750,7 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_WGPU_NAN_TRACE` | Bisect | Bool | Backend(wgpu) | Legacy wgpu NaN trace (prefer RLX_DEBUG_NANS) |
 | `RLX_WGPU_NO_COOP_F16_VK` | Bisect | Bool | Backend(wgpu) | Disable f16 cooperative matrices in the wgpu Vulkan backend |
 | `RLX_WGPU_NO_COOP_F32` | Bisect | Bool | Backend(wgpu) | Disable f32 cooperative matrices |
+| `RLX_WGPU_NO_COOP_PROBE` | Bisect | Bool | Backend(wgpu) | Skip the cooperative-matrix self-check and trust the kernels |
 | `RLX_WGPU_NO_F16_MIRROR` | Bisect | Bool | Backend(wgpu) | Do not keep an f16 mirror of f32 weights |
 | `RLX_WGPU_NO_F16_SHADOW` | Bisect | Bool | Backend(wgpu) | Do not allocate the f16 shadow buffer |
 | `RLX_WGPU_NO_FOLD_MMBA` | Internal | Bool | Backend(wgpu) | Disable folding matmul+bias+activation into one node |
@@ -761,11 +774,14 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_WGPU_TEE_VETO_LOG` | Internal | Bool | Backend(wgpu) | Log residual-LN tee folds vetoed as arena-unsafe |
 | `RLX_WGPU_TILED_MIN_SPATIAL` | Bisect | U64 | Backend(wgpu) | Minimum spatial extent before the tiled conv path is used |
 | `RLX_WGPU_TRANSPOSE_HOST` | Internal | Bool | Backend(wgpu) | Run Transpose on the host instead of a wgpu kernel |
+| `RLX_WGPU_WIDE_NV` | Bisect | Bool | Backend(wgpu) | Pin the scalar matmul_wide_nv kernel instead of the vec4 one |
+| `RLX_WGPU_WIDE_STD` | Bisect | Bool | Backend(wgpu) | Pin the scalar matmul_wide kernel instead of the vec4 one |
 
 ## xdna
 
 | Name | Stability | Kind | Layer | Summary |
 |------|-----------|------|-------|---------|
+| `RLX_XDNA_AIECC_GET` | Bisect | String | Backend(xdna) | Comma-separated aiecc --get edge names, overriding the probed shorthand list |
 | `RLX_XDNA_AIE_INCLUDE` | Internal | String | Backend(xdna) | Include directory for the MLIR-AIE toolchain |
 | `RLX_XDNA_CHAIN_CAP` | Internal | String | Backend(xdna) | Max ops chained into one XDNA submission |
 | `RLX_XDNA_GEMM` | Internal | String | Backend(xdna) | GEMM dimensions for the XDNA example, as m,k,n |
@@ -865,7 +881,7 @@ Identifiers still appearing in the tree but not yet in the registry (docs, bench
 | `RLX_MLX_COMPILE_OUTPUT_CAP` | `crates/backends/rlx-mlx/src/config.rs` |
 | `RLX_MLX_CUDA` | `crates/backends/rlx-mlx-sys/build.rs` |
 | `RLX_MLX_NO_CCACHE` | `crates/backends/rlx-mlx-sys/build.rs` |
-| `RLX_MLX_OK` | `crates/backends/rlx-mlx/src/array.rs` |
+| `RLX_MLX_OK` | `crates/backends/rlx-mlx/src/lib.rs` |
 | `RLX_MPSGRAPH_ATTENTION` | `crates/backends/rlx-metal/src/mps_graph.rs` |
 | `RLX_NODE_ERR_ARG` | `crates/bindings/rlx-ffi/src/lib.rs` |
 | `RLX_NODE_ERR_BUSY` | `crates/bindings/rlx-ffi/src/lib.rs` |
@@ -906,6 +922,7 @@ Identifiers still appearing in the tree but not yet in the registry (docs, bench
 | `RLX_SGEMM_TILES` | `crates/backends/rlx-metal/src/kernels.rs` |
 | `RLX_SHFL_ALL_LANES` | `crates/backends/rlx-rocm/src/backend/run.rs` |
 | `RLX_SIM_DEVICE` | `Justfile` |
+| `RLX_SIM_PLATFORM` | `scripts/apple-sim-runner.sh` |
 | `RLX_SKIP_WRITEBACK` | `docs/benchmarks/frameworks-and-backends.md` |
 | `RLX_SMOLLM2_GGUF` | `rig.sh` |
 | `RLX_STAGES` | `crates/backends/rlx-metal/src/apple_params.rs` |
@@ -928,3 +945,7 @@ just gen-rlx-env-vars
 ```
 
 Add new names to `env_registry_data.inc.rs`. Unregistered `env::flag("RLX_…")` call sites fail `just check-rlx-env-vars`.
+
+## License
+
+MIT OR Apache-2.0.

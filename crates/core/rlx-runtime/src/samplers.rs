@@ -104,6 +104,40 @@ impl SamplerChain {
         }
         sample_from_logits(logits, rng)
     }
+
+    /// Run every sampler in order, then take the highest-scoring token
+    /// rather than drawing one — what `temperature = 0` means.
+    ///
+    /// The chain still runs. A repetition penalty or DRY is about which
+    /// tokens are *allowed*, not about randomness, so dropping them would
+    /// make "be deterministic" also mean "forget my other settings". Only
+    /// the final choice changes.
+    pub fn sample_argmax(
+        &self,
+        logits: Logits<'_>,
+        history: &[u32],
+        state: &mut SamplerState,
+        rng: &mut Philox4x32,
+    ) -> u32 {
+        for step in &self.steps {
+            step.apply(logits, history, state, rng);
+        }
+        argmax_logits(logits)
+    }
+}
+
+/// Index of the largest logit. Ties go to the lowest index, so the result
+/// does not depend on iteration order.
+pub fn argmax_logits(logits: &[f32]) -> u32 {
+    let mut best = 0usize;
+    let mut best_v = f32::NEG_INFINITY;
+    for (i, &v) in logits.iter().enumerate() {
+        if v > best_v {
+            best_v = v;
+            best = i;
+        }
+    }
+    best as u32
 }
 
 impl Default for SamplerChain {

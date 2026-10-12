@@ -64,3 +64,6 @@ The patch makes `JitCompiler::available()` answer `false` on those platforms
 without asking, and keeps `exec()` compiling. MLX already treats an unavailable
 JIT compiler as a supported state and falls back to its non-compiled CPU
 kernels, so this costs a fast path that could never have existed there.
+## License
+
+MIT OR Apache-2.0.

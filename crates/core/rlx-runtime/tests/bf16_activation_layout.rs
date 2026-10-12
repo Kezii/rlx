@@ -1,3 +1,7 @@
+// RLX — versatile ML compiler + runtime.
+// Copyright (C) 2026 Eugene Hauptmann, Nataliya Kosmyna.
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! A BF16 **activation** must round-trip and compute correctly on every backend.
 //!
 //! Low-precision tensors live in the arena in two different layouts — PACKED at

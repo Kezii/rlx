@@ -23,6 +23,68 @@ release, rename `[Unreleased]` to the new version and add a fresh empty
 
 ## [Unreleased]
 
+### Added
+
+- **`just check-rustdoc` — a rustdoc gate, wired into `just ci`.** rustdoc was in
+  no repo gate, and `cargo doc --workspace` is the wrong instrument for one: it
+  resolves the whole workspace under a single unified (default) feature set, so
+  an intra-doc link into a feature-gated item reads as "unresolved" even though
+  docs.rs resolves it perfectly. 26 of 28 workspace warnings were phantoms of
+  exactly that kind, and the two real ones were buried among them.
+  `scripts/check-rustdoc.py` builds one crate at a time with that crate's own
+  `[package.metadata.docs.rs]` features — what docs.rs actually does — and skips
+  `publish = false` crates, which docs.rs never builds.
+
+### Changed
+
+- **`rlx-js` takes `quickrs-core` from crates.io instead of a sibling checkout.**
+  The engine is published as of 0.16.2, so building this workspace no longer
+  needs a `../quickjs-rs` directory beside it. That requirement reached further
+  than one crate: a path dep makes the *whole* workspace unresolvable without the
+  sibling, which is why `just test-wgpu-linux` and the emulated ISA runs both
+  bind-mounted it into their containers. Both mounts are gone. To iterate on the
+  engine and the binding together, add a `[patch.crates-io]` entry rather than
+  reinstating the path dep.
+
+- **`just test-js` covers the whole JS surface by default.** Its default features
+  were `cpu,gguf`, but `tests/js_api.rs` carried no feature gates, so 26 tests
+  failed with `undefined is not a constructor` for `rlx.Trainer`,
+  `rlx.Optimizer` and `renderChat` — the crate's canonical command was red. Each
+  test is now gated to the features it exercises, so a narrower set is green
+  instead of broken, and the recipe's default is the crate's own default set, so
+  the bare command runs all 91 rather than silently skipping 26. The sandbox test
+  behind the README's "no I/O a script can reach" claim is the exception: its
+  probe list follows the enabled features instead of being gated away wholesale,
+  because a claim tested too narrowly is worse than no claim.
+
+### Fixed
+
+- **The env-var registry had drifted by 15 reads.** `RLX_BLAS_ALIAS_CHECK`, seven
+  Metal knobs (small-m MPS routing and its trace, the share-driven weight split
+  and its byte threshold, the three PTQ1_0 levers), five wgpu ones (the
+  cooperative-matrix probe and its verbose mode, the feed trace, the two
+  wide-GEMM pins) and `RLX_XDNA_AIECC_GET` were read by the code but absent from
+  `env_registry_data.inc.rs` — so none of them appeared in
+  `docs/rlx-env-vars.md` or `just env-catalog`, and a user had no way to learn
+  they existed.
+
+  `just check-rlx-env-vars` returns at its first failing stage, so this failure
+  had been masking the next two: the shim bypasses below, and a generated doc one
+  entry out of date.
+
+- **Two `RLX_*` reads bypassed the `rlx_ir::env` shim, so nothing in-process
+  could set them.** `RLX_MODELS_DIR` (rlx-js tests) and `RLX_SHOW_VALS`
+  (rlx-metal tests) went through `std::env`, which `RlxEnv` and any harness that
+  A/Bs two settings inside one process cannot reach. Both read through the shim
+  now.
+
+- **Two intra-doc links pointed at the wrong item or at no item.**
+  `StepOptions::broadcast_token` linked `Self::generate`, but `generate` is on
+  `PipelineCoordinator`; and `rlx-torch-ckpt`'s public `pickle` module docs
+  linked the private `crate::torch`. Both rendered as dead links on docs.rs, and
+  both are what the new `just check-rustdoc` found once the phantom warnings were
+  out of the way.
+
 ## [0.2.17] — 2026-10-03
 
 ### Fixed

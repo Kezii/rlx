@@ -12,8 +12,8 @@
 //! const { device, outputs } = r.run(inputs);
 //! ```
 //!
-//! [`Runner`] wraps `GraphDevices` — explicit device choice, warm-all,
-//! benchmark-pick. [`Router`] wraps `DeviceRouter`, which adds a fallback
+//! `rlx.Runner` wraps `GraphDevices` — explicit device choice, warm-all,
+//! benchmark-pick. `rlx.Router` wraps `DeviceRouter`, which adds a fallback
 //! chain: when a backend fails to compile or run, the next one is tried and
 //! the error names every attempt rather than just the last.
 

@@ -1,3 +1,7 @@
+// RLX — versatile ML compiler + runtime.
+// Copyright (C) 2026 Eugene Hauptmann, Nataliya Kosmyna.
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! A half-typed **activation** is stored widened to f32; a half **param**
 //! stays packed at 2 B. Ops must route on the slot's real width, not on the
 //! declared dtype.

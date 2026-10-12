@@ -558,6 +558,26 @@ impl ProcessGroup {
     }
 
     /// Receive a tensor from `from`. Length is taken from the wire.
+    /// Like [`Self::recv_f32`] but gives up after `timeout`, returning
+    /// `Ok(None)`.
+    ///
+    /// For a caller that is waiting on a specific peer and would otherwise
+    /// wait forever: a machine that was unplugged or went to sleep does not
+    /// close its sockets, so a plain `recv` on it never returns. A bound
+    /// turns that into an error that can name the rank that went quiet.
+    pub fn recv_f32_timeout(
+        &self,
+        from: u32,
+        tag: u32,
+        timeout: Duration,
+    ) -> Result<Option<Vec<f32>>, CollectiveError> {
+        debug_assert!(tag < TAG_RESERVED_BASE, "tag collides with collective tags");
+        match self.transport.recv_bytes_timeout(from, tag, timeout)? {
+            Some(b) => Ok(Some(le_bytes_to_f32(&b)?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn recv_f32(&self, from: u32, tag: u32) -> Result<Vec<f32>, CollectiveError> {
         debug_assert!(tag < TAG_RESERVED_BASE, "tag collides with collective tags");
         self.recv_f32_tagged(from, tag)

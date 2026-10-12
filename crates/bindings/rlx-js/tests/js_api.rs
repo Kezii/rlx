@@ -975,7 +975,7 @@ fn tokenizer_fixture() -> Option<std::path::PathBuf> {
             .join("../../../../rlx-models")
             .join(rel),
     ];
-    if let Some(dir) = std::env::var_os("RLX_MODELS_DIR") {
+    if let Some(dir) = rlx_ir::env::var_os("RLX_MODELS_DIR") {
         candidates.push(std::path::PathBuf::from(dir).join(rel));
     }
     candidates.into_iter().find(|p| p.is_file())

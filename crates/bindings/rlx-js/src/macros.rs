@@ -11,7 +11,7 @@
 //! (see [`crate::handle`] on aliasing), and a declared arity that drifts from
 //! the parameter list.
 //!
-//! [`graph_ops!`] takes both out of a human's hands. It emits one anonymous
+//! [`crate::graph_ops!`] takes both out of a human's hands. It emits one anonymous
 //! `NativeFn` per op — a non-capturing closure coerces to the plain `fn`
 //! pointer the engine wants, so there is no name to invent — always converts
 //! arguments first, and counts the arity from the signature.

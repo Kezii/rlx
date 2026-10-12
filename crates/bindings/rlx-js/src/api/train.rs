@@ -4,8 +4,8 @@
 
 //! Training from JavaScript.
 //!
-//! Two levels. [`Optimizer`] is `rlx-optim` — Adam, AdamW, Muon, SOAP, Lion
-//! and the rest — driving arrays the script owns. [`Trainer`] is the whole
+//! Two levels. `rlx.Optimizer` is `rlx-optim` — Adam, AdamW, Muon, SOAP, Lion
+//! and the rest — driving arrays the script owns. `rlx.Trainer` is the whole
 //! loop: it differentiates the forward graph once, compiles it once, keeps
 //! the parameters, and gives back a scalar loss per step.
 //!

@@ -321,6 +321,38 @@ impl IrohTransport {
         })
     }
 
+    /// Bring up a rank from a **shared seed** — the zero-config path across
+    /// NAT.
+    ///
+    /// Every rank derives every rank's identity from the same seed, so the
+    /// only thing that has to be distributed is the seed itself: no endpoint
+    /// ids to copy between machines, no addresses, no ports. Reachability is
+    /// [`connect_discovered`](Self::connect_discovered)'s (relays + pkarr/DNS
+    /// discovery), so the ranks find each other wherever they are.
+    ///
+    /// The seed is a **shared secret**: anyone holding it can derive a rank's
+    /// key and join the group as that rank. It is the right trade for someone
+    /// pooling their own machines, and the wrong one for an untrusted network
+    /// — there, pass explicit ids and per-rank secrets to
+    /// [`connect_discovered`](Self::connect_discovered).
+    pub fn connect_seeded(
+        rank: u32,
+        world: u32,
+        seed: &[u8],
+        alpn: &[u8],
+    ) -> Result<Self, CollectiveError> {
+        if seed.is_empty() {
+            return Err(terr("the iroh seed is empty"));
+        }
+        Self::connect_discovered(
+            rank,
+            world,
+            seeded_secret(seed, rank),
+            seeded_peers(seed, world),
+            alpn,
+        )
+    }
+
     /// Convenience: bring up a rank with a fresh ephemeral identity.
     pub fn connect_ephemeral(
         rank: u32,
@@ -576,6 +608,20 @@ fn derive_key(seed: &[u8], rank: u32) -> [u8; 32] {
         k[28 + i] ^= rb[i].rotate_left(3).wrapping_add(0x5a);
     }
     k
+}
+
+/// Rank `r`'s secret key derived from a shared `seed`. See
+/// [`IrohTransport::connect_seeded`] for the trust model.
+pub fn seeded_secret(seed: &[u8], rank: u32) -> SecretKey {
+    SecretKey::from_bytes(&derive_key(seed, rank))
+}
+
+/// Every rank's [`IrohPeer`] derived from a shared `seed`, indexed by rank —
+/// the peer list [`IrohTransport::connect_seeded`] dials.
+pub fn seeded_peers(seed: &[u8], world: u32) -> Vec<IrohPeer> {
+    (0..world)
+        .map(|r| IrohPeer::new(seeded_secret(seed, r).public()))
+        .collect()
 }
 
 /// Build a ready [`ProcessGroup`](crate::transport::ProcessGroup) whose

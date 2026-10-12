@@ -138,7 +138,7 @@ fn depthwise_conv_backward_weight_through_views_matches_cpu() {
             );
             if flag {
                 bad.push(format!("C{c}H{h}K{k}/{which}"));
-                if std::env::var_os("RLX_SHOW_VALS").is_some() {
+                if rlx_ir::env::var_os("RLX_SHOW_VALS").is_some() {
                     println!("      cpu  {:?}", &a[..a.len().min(12)]);
                     println!("      metal{:?}", &b[..b.len().min(12)]);
                     let per_group: Vec<usize> = (0..c)

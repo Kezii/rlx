@@ -2,7 +2,13 @@
 # RLX — versatile ML compiler + runtime.
 # Copyright (C) 2026 Eugene Hauptmann, Nataliya Kosmyna.
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Add or complete RLX dual-license (MIT OR Apache-2.0) file headers in workspace source trees."""
+"""Add or complete RLX dual-license (MIT OR Apache-2.0) file headers in workspace source trees.
+
+Usage:
+  python3 scripts/add_license_headers.py            # rewrite in place
+  python3 scripts/add_license_headers.py --dry-run  # report, change nothing
+  python3 scripts/add_license_headers.py --check    # report and exit 1 on drift
+"""
 
 from __future__ import annotations
 
@@ -165,6 +171,11 @@ def prepend_header(text: str, path: Path) -> str:
     if path.suffix == ".sh" and text.startswith("#!"):
         first, _, rest = text.partition("\n")
         return f"{first}\n{header}{rest}"
+    # Blank line between the header and the first real line, which is what every
+    # already-conforming file in the tree looks like. Without it a prepended
+    # header butts straight against a `//!` module doc.
+    if text and not text.startswith("\n"):
+        return f"{header}\n{text}"
     return header + text
 
 
@@ -218,7 +229,11 @@ def process(path: Path, dry_run: bool) -> str | None:
 
 
 def main() -> int:
-    dry_run = "--dry-run" in sys.argv
+    # `--check` is `--dry-run` that FAILS on drift, so this can sit in a gate.
+    # It was in none, which is how nine files ended up without a header: the
+    # script only ever ran when someone remembered to run it.
+    check = "--check" in sys.argv
+    dry_run = check or "--dry-run" in sys.argv
     changed: dict[str, int] = {"expand": 0, "prepend": 0, "license-footer": 0}
     for path in iter_targets():
         rel = path.relative_to(ROOT)
@@ -234,6 +249,12 @@ def main() -> int:
         f"(expand={changed['expand']}, prepend={changed['prepend']}, "
         f"license-footer={changed['license-footer']})"
     )
+    if check and total:
+        print(
+            "license headers are missing; run: just license-headers",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

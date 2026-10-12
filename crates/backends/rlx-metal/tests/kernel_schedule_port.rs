@@ -33,19 +33,29 @@ fn the_declared_stride_matches_every_simdgroup_load_in_the_source() {
     // A stride that disagrees with the region compiles cleanly and reads the
     // wrong elements.
     let strides = simdgroup_strides_in("hgemm_simd_4x4");
-    // Exactly two: the pair of `simdgroup_load` calls over threadgroup memory.
+    // `simdgroup_strides_in` scans loads first, then stores, so this is:
     //
-    // The `simdgroup_store` is deliberately absent — it writes device memory
-    // with `N`, a runtime kernel argument, so its stride is not a literal and
+    // * the pair of `simdgroup_load` calls over threadgroup memory, at the
+    //   A_tg/B_tg row stride, and
+    // * the masked edge store's staging `simdgroup_store(c, stage, 8)` — the
+    //   8x8 accumulator written row-major into the simdgroup's own 64-element
+    //   slice of A_tg, so its row stride is the simdgroup tile and NOT the
+    //   32-wide region it borrows memory from. That distinction is the whole
+    //   reason this check reads the literal instead of assuming one value per
+    //   kernel.
+    //
+    // The *device* `simdgroup_store` in the aligned path stays absent: it
+    // passes `N`, a runtime kernel argument, so its stride is not a literal and
     // is outside what a source scan can check. Stating that is the honest
     // scope of this gate: it covers on-chip staging, where the stride is fixed
     // at compile time and where a mismatch is silent, and not the global
     // epilogue, where the stride comes from the caller.
     assert_eq!(
         strides,
-        vec![32, 32],
-        "expected both threadgroup simdgroup_loads to pass a literal stride; if the \
-         kernel changed shape, revisit the scan rather than relaxing this"
+        vec![TG_TILE, TG_TILE, SIMDGROUP_TILE as usize],
+        "expected both threadgroup simdgroup_loads at the A_tg row stride plus the edge \
+         store's 8-wide staging; if the kernel changed shape, revisit the scan rather \
+         than relaxing this"
     );
 
     let sched = hgemm_simd_4x4_schedule();

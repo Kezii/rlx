@@ -611,6 +611,32 @@ check-example-names:
 check-doc-links:
     python3 scripts/check-doc-links.py
 
+# rustdoc gate, wired into `just ci`.
+#
+# Per-crate, with each crate's own `[package.metadata.docs.rs]` features —
+# because that is what docs.rs builds. `cargo doc --workspace` uses ONE unified
+# (default) feature set instead, so every intra-doc link into a feature-gated
+# item reads as "unresolved": 26 of 28 such warnings were phantoms, and the two
+# real ones were buried in them. Skips `publish = false` crates; docs.rs never
+# builds those.
+#
+# Usage: `just check-rustdoc` or `just check-rustdoc rlx-tensor` for one crate.
+check-rustdoc *CRATES:
+    python3 scripts/check-rustdoc.py --keep-going {{CRATES}}
+
+# Dual-license header gate, wired into `just ci`.
+#
+# The writer half (`just license-headers`) existed; the gate did not, so the
+# only thing keeping headers on new files was someone remembering to run it.
+# Nine files had drifted — five tests/examples with no header and three docs
+# with no `## License` footer.
+check-license-headers:
+    python3 scripts/add_license_headers.py --check
+
+# Add any missing dual-license headers / footers in place.
+license-headers:
+    python3 scripts/add_license_headers.py
+
 # Print the checklist / stub paths for adding a new Op (does not edit the tree).
 # Usage: `just new-op MyOp` or `just new-op MyOp --write` to create empty stub files.
 new-op NAME *ARGS:
@@ -899,7 +925,7 @@ run-verbose CMD:
     RLX_VERBOSE=1 {{CMD}}
 
 # Quick basic test of the workspace: build + test + lint + fast smokes.
-ci: build test fmt-check lint check-rlx-env-vars check-example-names check-doc-links check-corpus check-wasm test-pyrlx test-third-order-gpu test-rocm leak-check validate-metal-bindings
+ci: build test fmt-check lint check-rlx-env-vars check-example-names check-doc-links check-rustdoc check-license-headers check-corpus check-wasm test-pyrlx test-third-order-gpu test-rocm leak-check validate-metal-bindings
 
 # ROCm compile check + graph_devices parity (tests skip when HIP unavailable).
 #
