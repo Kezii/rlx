@@ -10,7 +10,6 @@ keywords = ["umap", "knn", "manifold", "rlx", "dim-reduction"]
 categories.workspace   = true
 readme                 = "README.md"
 repository.workspace   = true
-homepage.workspace     = true
 documentation.workspace = true
 
 [features]

@@ -116,14 +116,18 @@ fn widen_host_bytes_to_graph_dtype(data: &[u8], dt: DType, graph_dt: DType) -> (
     match (dt, graph_dt) {
         (DType::F16, DType::F32) => {
             let f: Vec<f32> = data
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32())
                 .collect();
             (f.iter().flat_map(|v| v.to_le_bytes()).collect(), DType::F32)
         }
         (DType::BF16, DType::F32) => {
             let f: Vec<f32> = data
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| half::bf16::from_le_bytes([c[0], c[1]]).to_f32())
                 .collect();
             (f.iter().flat_map(|v| v.to_le_bytes()).collect(), DType::F32)
@@ -133,14 +137,18 @@ fn widen_host_bytes_to_graph_dtype(data: &[u8], dt: DType, graph_dt: DType) -> (
         // were rewritten — also accept I64/I32 host bytes for F32 slots.
         (DType::I64, DType::F32) => {
             let f: Vec<f32> = data
-                .chunks_exact(8)
-                .map(|c| i64::from_le_bytes(c.try_into().unwrap()) as f32)
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|c| i64::from_le_bytes(*c) as f32)
                 .collect();
             (f.iter().flat_map(|v| v.to_le_bytes()).collect(), DType::F32)
         }
         (DType::I32, DType::F32) => {
             let f: Vec<f32> = data
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f32)
                 .collect();
             (f.iter().flat_map(|v| v.to_le_bytes()).collect(), DType::F32)

@@ -10,7 +10,6 @@ keywords.workspace     = true
 categories.workspace   = true
 readme                 = "README.md"
 repository.workspace   = true
-homepage.workspace     = true
 documentation.workspace = true
 # Library crate + a single emit binary. No proc-macro, no build script.
 # CSL generation is pure Rust; no Python, no `.csl` templates on disk.

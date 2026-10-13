@@ -816,8 +816,10 @@ mod rewrite_tests {
             let view = st.tensor(&key).expect("tensor");
             let f32s: Vec<f32> = view
                 .data()
-                .chunks_exact(4)
-                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| f32::from_le_bytes(*c))
                 .collect();
             params.insert(key.clone(), f32s);
             init_shapes.insert(key, view.shape().to_vec());

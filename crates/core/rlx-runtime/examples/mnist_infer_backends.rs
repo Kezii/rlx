@@ -148,7 +148,9 @@ fn main() {
 
     let wbytes = std::fs::read(&wpath).unwrap_or_else(|e| panic!("weights {wpath}: {e}"));
     let all: Vec<f32> = wbytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     assert_eq!(all.len(), PARAMS.iter().map(|(_, n)| *n).sum::<usize>());

@@ -28,8 +28,10 @@ fn const_c64(g: &mut Graph, re: &[f32], im: &[f32], shape: &[usize]) -> rlx_ir::
 }
 
 fn bytes_to_f32s(b: &[u8]) -> Vec<f32> {
-    b.chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+    b.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect()
 }
 

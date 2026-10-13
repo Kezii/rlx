@@ -18,7 +18,6 @@ keywords = ["onnx", "protobuf", "serialization", "rlx"]
 categories.workspace   = true
 readme                 = "README.md"
 repository.workspace   = true
-homepage.workspace     = true
 documentation.workspace = true
 
 [dependencies]

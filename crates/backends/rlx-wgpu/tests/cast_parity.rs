@@ -23,12 +23,16 @@ use rlx_wgpu::backend::WgpuExecutable;
 fn decode_to_f32(bytes: &[u8], dt: DType, n: usize) -> Vec<f32> {
     match dt {
         DType::F32 => bytes[..n * 4]
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect(),
         DType::I32 => bytes[..n * 4]
-            .chunks_exact(4)
-            .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f32)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| i32::from_le_bytes(*c) as f32)
             .collect(),
         DType::U8 | DType::Bool => bytes[..n].iter().map(|&b| b as f32).collect(),
         other => panic!("decode_to_f32: unhandled dtype {other:?}"),

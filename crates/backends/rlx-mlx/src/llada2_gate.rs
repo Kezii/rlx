@@ -32,12 +32,16 @@ impl MlxKernel for Llada2GateMlx {
         let sig_bytes = inputs[0].to_bytes()?;
         let route_bytes = inputs[1].to_bytes()?;
         let sig: Vec<f32> = sig_bytes
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect();
         let route: Vec<f32> = route_bytes
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect();
         let out_dims: Vec<usize> = output_shape
             .dims()

@@ -106,7 +106,12 @@ impl CpuKernel for DelaunayCpu {
                 pts.len()
             ));
         }
-        let points: Vec<[i32; 2]> = pts.chunks_exact(2).map(|c| [c[0], c[1]]).collect();
+        let points: Vec<[i32; 2]> = pts
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| [c[0], c[1]])
+            .collect();
         let tris = triangulate(&points).map_err(|e| format!("geo.delaunay: {e}"))?;
 
         let out = output.expect_i32_mut("geo.delaunay triangles")?;
@@ -169,7 +174,12 @@ impl CpuKernel for VoronoiGridCpu {
     ) -> Result<(), String> {
         let a = VoronoiGridAttrs::decode(attrs)?;
         let sites_i32 = inputs[0].expect_i32("geo.voronoi_grid sites")?;
-        let sites: Vec<[i32; 2]> = sites_i32.chunks_exact(2).map(|c| [c[0], c[1]]).collect();
+        let sites: Vec<[i32; 2]> = sites_i32
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| [c[0], c[1]])
+            .collect();
         let labels = voronoi_grid_exact(&sites, a.width, a.height);
 
         let out = output.expect_i32_mut("geo.voronoi_grid labels")?;

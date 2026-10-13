@@ -216,12 +216,16 @@ fn dyn_rope_decode_matches_baked_constants() {
     for (i, (a, b)) in out_baked.iter().zip(out_dyn.iter()).enumerate() {
         assert_eq!(a.0.len(), b.0.len(), "output {i} length");
         let fa: Vec<f32> =
-            a.0.chunks_exact(4)
-                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            a.0.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| f32::from_le_bytes(*c))
                 .collect();
         let fb: Vec<f32> =
-            b.0.chunks_exact(4)
-                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            b.0.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| f32::from_le_bytes(*c))
                 .collect();
         for (j, (x, y)) in fa.iter().zip(fb.iter()).enumerate() {
             assert!(
@@ -305,8 +309,10 @@ fn masked_padded_decode_matches_exact_length() {
     ]);
 
     let f32s = |b: &[u8]| -> Vec<f32> {
-        b.chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        b.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect()
     };
     // Only the logits are comparable: the KV outputs differ in length by

@@ -168,6 +168,23 @@ impl CompiledGraph {
 
     /// Set a named parameter (model weight).
     /// Call once per parameter after compilation.
+    /// True when this executable's wgpu schedule contains host-executed steps,
+    /// which the browser WebGPU path refuses (it cannot block to run them).
+    ///
+    /// Compile succeeds for such a graph and only `run_async` fails, so without
+    /// this a caller learns about it once per step rather than once at setup.
+    #[cfg(target_arch = "wasm32")]
+    pub fn requires_host_execution(&self) -> bool {
+        self.inner.wgpu_requires_host()
+    }
+
+    /// One line naming the host-executed steps in this graph's schedule, how
+    /// many sync points they cost, and how many are independent — `None` when
+    /// it runs entirely on the device.
+    pub fn host_execution_summary(&self) -> Option<String> {
+        self.inner.wgpu_host_summary()
+    }
+
     pub fn set_param(&mut self, name: &str, data: &[f32]) {
         // A narrower-than-f32 weight needs converting, not reinterpreting:
         // `set_param` writes the bytes as given, and 4 bytes of f32 read as two

@@ -124,6 +124,7 @@ pub mod resource_budget;
 pub mod router;
 pub mod samplers;
 pub mod session;
+pub mod shard_placement;
 pub mod stages;
 pub mod subgraph;
 pub mod trace;

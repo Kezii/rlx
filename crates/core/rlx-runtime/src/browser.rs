@@ -171,6 +171,21 @@ impl BrowserCompiledGraph {
         self.inner.set_param(name, data);
     }
 
+    /// True when running this graph on the browser WebGPU path would need
+    /// host-executed steps, which it refuses. Checkable right after
+    /// [`BrowserSession::compile`], so an unrunnable pairing of graph and
+    /// backend is a setup-time decision instead of a per-step error.
+    #[cfg(target_arch = "wasm32")]
+    pub fn requires_host_execution(&self) -> bool {
+        self.inner.requires_host_execution()
+    }
+
+    /// What this graph asks the host to do on this backend, if anything — the
+    /// detail a refusal should carry so the caller knows which way to move.
+    pub fn host_execution_summary(&self) -> Option<String> {
+        self.inner.host_execution_summary()
+    }
+
     /// Synchronous run (WebGL, CPU, or native WebGPU).
     pub fn run(&mut self, inputs: &[(&str, &[f32])]) -> Vec<Vec<f32>> {
         self.inner.run(inputs)

@@ -236,7 +236,9 @@ pub fn run_dequant_grouped_matmul_mlx<A: DeviceArena>(
     let widen = |bytes: &[u8]| -> Vec<f32> {
         if scale_bf16 {
             bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| half::bf16::from_le_bytes([c[0], c[1]]).to_f32())
                 .collect()
         } else {

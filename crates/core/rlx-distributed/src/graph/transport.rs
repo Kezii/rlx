@@ -69,7 +69,9 @@ fn read_tensors<R: Read>(r: &mut R) -> io::Result<Vec<NamedTensor>> {
         let mut db = vec![0u8; numel * 4];
         r.read_exact(&mut db)?;
         let data = db
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         out.push(NamedTensor { name, shape, data });

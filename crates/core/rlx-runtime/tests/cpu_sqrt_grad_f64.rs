@@ -61,8 +61,10 @@ fn run_grad(g: &Graph, x: &[f64]) -> Vec<f64> {
     let outs = compiled.run_typed(&[("d_output", &one, DType::F64)]);
     outs[1]
         .0
-        .chunks_exact(8)
-        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| f64::from_le_bytes(*c))
         .collect()
 }
 

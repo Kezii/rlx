@@ -452,9 +452,8 @@ fn bmm_broadcast_check(dev: Device, bcast_lhs: bool, tag: &str) {
     }
     let (batch, m, k, nn) = (3usize, 2usize, 4usize, 5usize);
     let mut g = Graph::new("bmm_bcast");
-    let out;
     let (lhs, rhs);
-    if bcast_lhs {
+    let out = if bcast_lhs {
         lhs = (0..m * k)
             .map(|i| (i as f64) * 0.1 - 0.3)
             .collect::<Vec<_>>();
@@ -465,7 +464,7 @@ fn bmm_broadcast_check(dev: Device, bcast_lhs: bool, tag: &str) {
         let r = const_f32(&mut g, &rhs, &[batch, k, nn]);
         let y = g.mm(l, r);
         g.set_outputs(vec![y]);
-        out = run(dev, g);
+        run(dev, g)
     } else {
         lhs = (0..batch * m * k)
             .map(|i| ((i * 5 % 13) as f64 - 6.0) * 0.15)
@@ -477,8 +476,8 @@ fn bmm_broadcast_check(dev: Device, bcast_lhs: bool, tag: &str) {
         let r = const_f32(&mut g, &rhs, &[1, k, nn]);
         let y = g.mm(l, r);
         g.set_outputs(vec![y]);
-        out = run(dev, g);
-    }
+        run(dev, g)
+    };
     for b in 0..batch {
         let refc = if bcast_lhs {
             matmul(&lhs, &rhs[b * k * nn..(b + 1) * k * nn], m, k, nn)

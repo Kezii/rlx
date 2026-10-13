@@ -507,11 +507,15 @@ fn complex_norm_sq_matches_cpu() {
     let want = cpu_run_typed(&g, &[("z", z_bytes.clone())]);
     let got = mlx_run_typed(g, &[("z", &z_bytes, DType::C64)]);
     let want_f: Vec<f32> = want
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let got_f: Vec<f32> = got
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     assert!(
@@ -904,11 +908,15 @@ fn scaled_dequantize_per_tensor_matches_cpu() {
         ],
     );
     let want_f: Vec<f32> = want
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let got_f: Vec<f32> = got
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     assert!(
@@ -969,11 +977,15 @@ fn scaled_matmul_per_tensor_matches_cpu() {
         ],
     );
     let want_f: Vec<f32> = want
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let got_f: Vec<f32> = got
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     assert!(

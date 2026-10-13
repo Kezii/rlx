@@ -194,18 +194,24 @@ impl MlxKernel for OnnxHostDelegate {
         .map_err(MlxError)?;
         if rlx_ir::env::var("RLX_DBG_CUSTOM").is_some() {
             let peak = out_buf
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]).abs())
                 .fold(0.0f32, f32::max);
             let head: Vec<f32> = out_buf
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .take(4)
                 .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect();
             let in0_head: Vec<f32> = views
                 .first()
                 .map(|(b, _)| {
-                    b.chunks_exact(4)
+                    b.as_chunks::<4>()
+                        .0
+                        .iter()
                         .take(8)
                         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                         .collect()
@@ -219,7 +225,7 @@ impl MlxKernel for OnnxHostDelegate {
                         rlx_ir::DType::F32 => {
                             let mut p = 0.0f32;
                             let mut n = 0usize;
-                            for c in b.chunks_exact(4) {
+                            for c in b.as_chunks::<4>().0 {
                                 let x = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
                                 if !x.is_finite() {
                                     n += 1;

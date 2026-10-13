@@ -489,7 +489,7 @@ fn is_constant_filled(graph: &Graph, id: NodeId, value: f32) -> bool {
     match n.shape.dtype() {
         DType::F32 => {
             let want = value.to_le_bytes();
-            !data.is_empty() && data.chunks_exact(4).all(|c| c == want)
+            !data.is_empty() && data.as_chunks::<4>().0.iter().all(|c| *c == want)
         }
         DType::F16 => {
             // IEEE f16: +0.0 = 0x0000, +1.0 = 0x3C00 (only values we need).
@@ -500,7 +500,7 @@ fn is_constant_filled(graph: &Graph, id: NodeId, value: f32) -> bool {
             } else {
                 return false;
             };
-            !data.is_empty() && data.chunks_exact(2).all(|c| c == want)
+            !data.is_empty() && data.as_chunks::<2>().0.iter().all(|c| *c == want)
         }
         _ => false,
     }

@@ -21,8 +21,10 @@ pub fn load_i64_params(bytes: &[u8]) -> Result<HashMap<String, Vec<i64>>> {
         let data = view.data();
         let v: Vec<i64> = match view.dtype() {
             Dtype::I64 => data
-                .chunks_exact(8)
-                .map(|chunk| i64::from_le_bytes(chunk.try_into().unwrap()))
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|chunk| i64::from_le_bytes(*chunk))
                 .collect(),
             // Axis / index / shape initializers are commonly exported as I32
             // (ONNX permits int32 or int64 for CumSum `axis`, Gather indices,
@@ -32,8 +34,10 @@ pub fn load_i64_params(bytes: &[u8]) -> Result<HashMap<String, Vec<i64>>> {
             // sine-source phase `CumSum` (axis=1) into a no-op over the size-1
             // batch axis → dead harmonic oscillator → near-silent vocoder.
             Dtype::I32 => data
-                .chunks_exact(4)
-                .map(|chunk| i64::from(i32::from_le_bytes(chunk.try_into().unwrap())))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|chunk| i64::from(i32::from_le_bytes(*chunk)))
                 .collect(),
             Dtype::BOOL => data.iter().map(|&b| i64::from(b != 0)).collect(),
             _ => continue,
@@ -87,7 +91,9 @@ pub fn materialize_quantized_f32(
                 .collect(),
             Dtype::F32 => {
                 let raw = view.data();
-                raw.chunks_exact(4)
+                raw.as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                     .collect()
             }
@@ -134,7 +140,9 @@ pub fn load_f32_params(
             Dtype::F32 => {
                 let data: Vec<f32> = view
                     .data()
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                     .collect();
                 params.insert(name.to_string(), data);
@@ -142,7 +150,9 @@ pub fn load_f32_params(
             Dtype::F16 => {
                 let data: Vec<f32> = view
                     .data()
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32())
                     .collect();
                 params.insert(name.to_string(), data);
@@ -150,7 +160,9 @@ pub fn load_f32_params(
             Dtype::BF16 => {
                 let data: Vec<f32> = view
                     .data()
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|c| {
                         let bits = u16::from_le_bytes([c[0], c[1]]);
                         f32::from_bits((bits as u32) << 16)

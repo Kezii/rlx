@@ -223,16 +223,22 @@ pub(crate) fn widen_input_bytes_to_f32(data: &[u8], dt: rlx_ir::DType) -> Vec<f3
         // Integer/bool inputs widen to f32 — `widen_integer_activations_to_f32`
         // rewrites their arena slots to F32, so this matches the graph dtype.
         DType::I64 => data
-            .chunks_exact(8)
-            .map(|c| i64::from_le_bytes(c.try_into().unwrap()) as f32)
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| i64::from_le_bytes(*c) as f32)
             .collect(),
         DType::I32 => data
-            .chunks_exact(4)
-            .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f32)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| i32::from_le_bytes(*c) as f32)
             .collect(),
         DType::U32 => data
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes(c.try_into().unwrap()) as f32)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c) as f32)
             .collect(),
         DType::Bool => data.iter().map(|&b| b as f32).collect(),
         other => panic!(

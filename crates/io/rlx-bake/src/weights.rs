@@ -330,7 +330,9 @@ fn f32_le_bytes(v: &[f32]) -> Vec<u8> {
 }
 
 fn bytes_to_f32(data: &[u8]) -> Vec<f32> {
-    data.chunks_exact(4)
+    data.as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }
@@ -356,31 +358,45 @@ fn decode_f32(raw: &[u8], dt: safetensors::Dtype) -> Result<Vec<f32>> {
     use safetensors::Dtype as D;
     Ok(match dt {
         D::F32 => raw
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect(),
         D::F64 => raw
-            .chunks_exact(8)
-            .map(|c| f64::from_le_bytes(c.try_into().unwrap()) as f32)
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| f64::from_le_bytes(*c) as f32)
             .collect(),
         D::F16 => raw
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| f16::from_le_bytes([c[0], c[1]]).to_f32())
             .collect(),
         D::BF16 => raw
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| bf16::from_le_bytes([c[0], c[1]]).to_f32())
             .collect(),
         D::I64 => raw
-            .chunks_exact(8)
-            .map(|c| i64::from_le_bytes(c.try_into().unwrap()) as f32)
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| i64::from_le_bytes(*c) as f32)
             .collect(),
         D::I32 => raw
-            .chunks_exact(4)
-            .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f32)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| i32::from_le_bytes(*c) as f32)
             .collect(),
         D::I16 => raw
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32)
             .collect(),
         D::U8 => raw.iter().map(|&b| b as f32).collect(),

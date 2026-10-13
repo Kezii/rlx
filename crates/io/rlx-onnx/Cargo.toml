@@ -7,7 +7,6 @@ license.workspace = true
 authors.workspace = true
 description = "ONNX inference for RLX — native compile by default, optional ORT fallback"
 repository.workspace = true
-homepage.workspace = true
 documentation.workspace = true
 readme = "README.md"
 keywords.workspace      = true

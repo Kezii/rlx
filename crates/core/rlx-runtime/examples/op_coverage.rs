@@ -150,13 +150,11 @@ fn main() {
             return;
         }
 
-        let cpu_status;
-        let metal_status;
-        match reference {
-            Some(refr) => {
-                cpu_status = classify(&cpu_out[0], Some(&refr), tol);
-                metal_status = classify(&metal_out[0], Some(&refr), tol);
-            }
+        let (cpu_status, metal_status) = match reference {
+            Some(refr) => (
+                classify(&cpu_out[0], Some(&refr), tol),
+                classify(&metal_out[0], Some(&refr), tol),
+            ),
             None => {
                 // No independent reference — fall back to all-zeros heuristic
                 // for CPU, then compare Metal against CPU. If CPU itself looks
@@ -164,12 +162,12 @@ fn main() {
                 // it produced the same zeros — both are likely silently
                 // no-op'd, so propagate the missing status to both.
                 let cpu_zero = near_zero(&cpu_out[0]);
-                cpu_status = if cpu_zero {
+                let cpu_status = if cpu_zero {
                     Status::Missing
                 } else {
                     Status::Ok
                 };
-                metal_status = if cpu_zero {
+                let metal_status = if cpu_zero {
                     if near_zero(&metal_out[0]) {
                         Status::Missing
                     } else {
@@ -178,8 +176,9 @@ fn main() {
                 } else {
                     classify(&metal_out[0], Some(&cpu_out[0]), tol)
                 };
+                (cpu_status, metal_status)
             }
-        }
+        };
         rows.push((name, cpu_status, metal_status));
     };
     // Wrapper for the common case (no independent reference, trust CPU).

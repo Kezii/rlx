@@ -20,15 +20,21 @@ use safetensors::{SafeTensors, tensor::Dtype as StDtype};
 fn dtype_to_f32(dtype: StDtype, bytes: &[u8]) -> Vec<f32> {
     match dtype {
         StDtype::F32 => bytes
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect(),
         StDtype::F16 => bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32())
             .collect(),
         StDtype::BF16 => bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| half::bf16::from_le_bytes([c[0], c[1]]).to_f32())
             .collect(),
         _ => Vec::new(),

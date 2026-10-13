@@ -32,6 +32,7 @@ pub mod quant_propagate;
 pub mod rewrite;
 pub mod scaled_quant_insert;
 pub mod sccp;
+pub mod shard;
 pub mod svg;
 
 #[cfg(feature = "training")]

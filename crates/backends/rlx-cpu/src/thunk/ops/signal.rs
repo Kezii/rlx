@@ -600,6 +600,13 @@ pub fn fft1d_q32_f32_valued(
             .zip(src.par_chunks_exact(4))
             .try_for_each(convert_in)?;
     } else {
+        // `as_chunks` would hand the closure `&[u8; 4]`, but `convert_in` is
+        // shared with the rayon arm above and rayon has no const-size
+        // `par_as_chunks`. Keep both arms feeding the same `&[u8]` signature.
+        // `unknown_lints` first: the clippy lint itself only exists from 1.100,
+        // and every older toolchain rejects the bare name under the workspace's
+        // `-D unknown-lints`.
+        #[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
         work.iter_mut()
             .zip(src.chunks_exact(4))
             .try_for_each(convert_in)?;
@@ -623,7 +630,7 @@ pub fn fft1d_q32_f32_valued(
             .zip(work.par_iter())
             .for_each(|(b, &v)| b.copy_from_slice(&(v as f32).to_le_bytes()));
     } else {
-        for (b, &v) in dst.chunks_exact_mut(4).zip(work.iter()) {
+        for (b, &v) in dst.as_chunks_mut::<4>().0.iter_mut().zip(work.iter()) {
             b.copy_from_slice(&(v as f32).to_le_bytes());
         }
     }

@@ -349,13 +349,12 @@ impl WgpuExecutable {
     /// panic with a clear message rather than hang.
     #[cfg(target_arch = "wasm32")]
     pub async fn run_async(&mut self, inputs: &[(&str, &[f32])]) -> Vec<Vec<f32>> {
-        assert!(
-            !self
-                .schedule
-                .iter()
-                .any(|s| step_runs_on_host(s) || step_is_tail_host(s)),
-            "rlx-wgpu run_async: graph contains host-executed ops unsupported on wasm"
-        );
+        // Name what is actually in the way. "Contains host-executed ops (GGUF
+        // dequant, LSTM, collectives, FFT-host, …)" listed what it might have
+        // been; a conv graph's real answer is one `Conv2dHost` per conv.
+        if let Some(summary) = self.host_summary() {
+            panic!("rlx-wgpu run_async: unsupported on wasm — {summary}");
+        }
 
         // 1. Dispatch + submit all compute, skipping the blocking readback.
         self.dispatch_only = true;
@@ -404,6 +403,23 @@ impl WgpuExecutable {
         self.schedule
             .iter()
             .any(|s| super::step_runs_on_host(s) || super::step_is_tail_host(s))
+    }
+
+    /// What this schedule asks the host to do, and which of those asks are
+    /// independent enough to share a sync point.
+    ///
+    /// Callers used to have only [`Self::requires_host_execution`] — one bit,
+    /// which is why the browser WebGPU refusal could name only the ops it
+    /// *might* have been. See [`super::host_plan`].
+    pub fn host_plan(&self) -> super::HostPlan {
+        super::host_plan(&self.schedule)
+    }
+
+    /// One line naming the host side of this schedule, or `None` when it is
+    /// entirely on the GPU.
+    pub fn host_summary(&self) -> Option<String> {
+        let plan = self.host_plan();
+        (!plan.is_empty()).then(|| plan.summary())
     }
 
     pub(crate) fn run_tail_host_audio_ops(&self, dev: &crate::device::WgpuDevice) {

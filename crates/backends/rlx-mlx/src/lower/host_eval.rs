@@ -77,7 +77,7 @@ fn array_from_host_bytes(bytes: &[u8], dims: &[usize], dtype: DType) -> Result<A
         DType::F32 | DType::F16 | DType::BF16 => {
             let n = bytes.len() / 4;
             let mut vals = Vec::with_capacity(n);
-            for chunk in bytes.chunks_exact(4) {
+            for chunk in bytes.as_chunks::<4>().0 {
                 vals.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
             }
             // F16/BF16 leaves are stored as f32 on MLX in this backend.

@@ -103,17 +103,24 @@ fn matmul_f16w(
     @builtin(local_invocation_id)    lid: vec3<u32>,
     @builtin(workgroup_id)           wid: vec3<u32>,
 ) {
-    let bz = gid.z;
-    if (bz >= params.batch) { return; }
+    // Use workgroup_id.z (uniform within the WG). Never early-return before
+    // workgroupBarrier: a `gid`-gated return is non-uniform control flow, which
+    // WGSL forbids. Dawn rejects the shader outright ("'workgroupBarrier' must
+    // only be called from uniform control flow"), so in Chrome every pipeline
+    // after it was invalid and the rank silently computed zeros; FXC rejects
+    // the same thing as X4026. Mirrors `matmul.wgsl`.
+    let bz = wid.z;
+    let in_batch = bz < params.batch;
+    let bz_safe = select(0u, bz, in_batch);
 
     let lr = lid.y;
     let lc = lid.x;
     let row_base = wid.y * TILE_M + lr * RM;
     let col_base = wid.x * TILE_N + lc * RN;
 
-    let a_base = params.a_off + bz * params.a_batch_stride;
-    let b_base = params.b_off + bz * params.b_batch_stride;  // f16 elements
-    let c_base = params.c_off + bz * params.c_batch_stride;
+    let a_base = params.a_off + bz_safe * params.a_batch_stride;
+    let b_base = params.b_off + bz_safe * params.b_batch_stride;  // f16 elements
+    let c_base = params.c_off + bz_safe * params.c_batch_stride;
 
     var acc: array<array<f32, 4>, 4>;
     for (var i: u32 = 0u; i < RM; i = i + 1u) {
@@ -132,7 +139,7 @@ fn matmul_f16w(
             for (var j: u32 = 0u; j < 2u; j = j + 1u) {
                 let k_local = lc * 2u + j;
                 let global_k = t * TILE_K + k_local;
-                if (global_row < params.m && global_k < params.k) {
+                if (in_batch && global_row < params.m && global_k < params.k) {
                     tile_a[m_local][k_local] = arena[a_base + global_row * params.k + global_k];
                 } else {
                     tile_a[m_local][k_local] = 0.0;
@@ -148,7 +155,7 @@ fn matmul_f16w(
             let global_k = t * TILE_K + k_local;
             let n_local_base = lc * RN;
             let global_col_base = wid.x * TILE_N + n_local_base;
-            if (global_k < params.k && global_col_base + 3u < params.n) {
+            if (in_batch && global_k < params.k && global_col_base + 3u < params.n) {
                 let f16_off = b_base + global_k * params.n + global_col_base;
                 let v: vec4<f16> = weights[f16_off / 4u];
                 let vf: vec4<f32> = vec4<f32>(v);
@@ -163,7 +170,7 @@ fn matmul_f16w(
                 for (var j: u32 = 0u; j < RN; j = j + 1u) {
                     let n_local = n_local_base + j;
                     let global_col = wid.x * TILE_N + n_local;
-                    if (global_k < params.k && global_col < params.n) {
+                    if (in_batch && global_k < params.k && global_col < params.n) {
                         let f16_off = b_base + global_k * params.n + global_col;
                         let vec_idx = f16_off / 4u;
                         let comp = f16_off % 4u;
@@ -206,7 +213,7 @@ fn matmul_f16w(
 
     for (var i: u32 = 0u; i < RM; i = i + 1u) {
         let global_row = row_base + i;
-        if (global_row >= params.m) { continue; }
+        if (!in_batch || global_row >= params.m) { continue; }
         for (var j: u32 = 0u; j < RN; j = j + 1u) {
             let global_col = col_base + j;
             if (global_col >= params.n) { continue; }

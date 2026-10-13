@@ -10,7 +10,6 @@ keywords.workspace     = true
 categories.workspace   = true
 readme                 = "README.md"
 repository.workspace   = true
-homepage.workspace     = true
 documentation.workspace = true
 # Not on crates.io yet: the JS surface is still moving. (The engine,
 # `quickrs-core`, is published, so this is the only thing holding it back.)

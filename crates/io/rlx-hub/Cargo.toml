@@ -9,16 +9,16 @@ license.workspace       = true
 keywords.workspace      = true
 categories.workspace    = true
 repository.workspace    = true
-homepage.workspace      = true
 documentation.workspace = true
 readme                  = "README.md"
 
 [dependencies]
-anyhow     = "1"
-serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2       = "0.10"
 thiserror  = "2"
+
+[dev-dependencies]
+anyhow     = "1"  # `examples/shard_download.rs` only — not part of the lib API.
 
 [lints]
 workspace = true

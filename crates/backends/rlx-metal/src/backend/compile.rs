@@ -1118,16 +1118,22 @@ fn int_bytes_to_f32_bytes(data: &[u8], dt: rlx_ir::DType) -> Vec<u8> {
     use rlx_ir::DType;
     match dt {
         DType::I64 => data
-            .chunks_exact(8)
-            .flat_map(|c| (i64::from_le_bytes(c.try_into().unwrap()) as f32).to_le_bytes())
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .flat_map(|c| (i64::from_le_bytes(*c) as f32).to_le_bytes())
             .collect(),
         DType::I32 => data
-            .chunks_exact(4)
-            .flat_map(|c| (i32::from_le_bytes(c.try_into().unwrap()) as f32).to_le_bytes())
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|c| (i32::from_le_bytes(*c) as f32).to_le_bytes())
             .collect(),
         DType::U32 => data
-            .chunks_exact(4)
-            .flat_map(|c| (u32::from_le_bytes(c.try_into().unwrap()) as f32).to_le_bytes())
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|c| (u32::from_le_bytes(*c) as f32).to_le_bytes())
             .collect(),
         DType::Bool => data
             .iter()
@@ -1213,8 +1219,10 @@ fn widen_integer_activations_to_f32(mut graph: Graph) -> Graph {
 
 /// Reinterpret little-endian F64 bytes as F32 values (byte-encoded).
 fn f64_bytes_to_f32_bytes(data: &[u8]) -> Vec<u8> {
-    data.chunks_exact(8)
-        .flat_map(|c| (f64::from_le_bytes(c.try_into().unwrap()) as f32).to_le_bytes())
+    data.as_chunks::<8>()
+        .0
+        .iter()
+        .flat_map(|c| (f64::from_le_bytes(*c) as f32).to_le_bytes())
         .collect()
 }
 

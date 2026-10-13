@@ -64,8 +64,10 @@ fn cpu_f64_constant_broadcasts() {
     let out = compiled.run_typed(&[("x", &payload, DType::F64)]);
     let got: Vec<f64> = out[0]
         .0
-        .chunks_exact(8)
-        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| f64::from_le_bytes(*c))
         .collect();
     assert!((got[0] - 0.5).abs() < 1e-12);
     assert!((got[1] - 1.5).abs() < 1e-12);

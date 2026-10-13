@@ -142,7 +142,9 @@ fn le_bytes_to_f32(bytes: &[u8]) -> Result<Vec<f32>, CollectiveError> {
         });
     }
     Ok(bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect())
 }
@@ -293,19 +295,27 @@ fn combine_i32(op: ReduceKind, a: i32, b: i32) -> i32 {
 fn decode_to_f64(bytes: &[u8], dtype: DType) -> Vec<f64> {
     match dtype {
         DType::F32 => bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64)
             .collect(),
         DType::F64 => bytes
-            .chunks_exact(8)
-            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| f64::from_le_bytes(*c))
             .collect(),
         DType::F16 => bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f64())
             .collect(),
         DType::BF16 => bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| half::bf16::from_le_bytes([c[0], c[1]]).to_f64())
             .collect(),
         _ => Vec::new(),
@@ -359,7 +369,9 @@ fn decode_to_f32(bytes: &[u8], dtype: DType) -> Vec<f32> {
                 }
             }
             bytes
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect()
         }
@@ -375,7 +387,7 @@ fn decode_to_f32(bytes: &[u8], dtype: DType) -> Vec<f32> {
                     return out;
                 }
             }
-            for (o, c) in out.iter_mut().zip(bytes.chunks_exact(2)) {
+            for (o, c) in out.iter_mut().zip(bytes.as_chunks::<2>().0.iter()) {
                 *o = half::f16::from_le_bytes([c[0], c[1]]).to_f32();
             }
             out
@@ -390,7 +402,7 @@ fn decode_to_f32(bytes: &[u8], dtype: DType) -> Vec<f32> {
                     return out;
                 }
             }
-            for (o, c) in out.iter_mut().zip(bytes.chunks_exact(2)) {
+            for (o, c) in out.iter_mut().zip(bytes.as_chunks::<2>().0.iter()) {
                 *o = half::bf16::from_le_bytes([c[0], c[1]]).to_f32();
             }
             out
@@ -407,7 +419,7 @@ fn decode_to_f32(bytes: &[u8], dtype: DType) -> Vec<f32> {
 fn encode_into(dst: &mut [u8], vals: &[f32], dtype: DType) {
     match dtype {
         DType::F32 => {
-            for (c, &v) in dst.chunks_exact_mut(4).zip(vals) {
+            for (c, &v) in dst.as_chunks_mut::<4>().0.iter_mut().zip(vals) {
                 c.copy_from_slice(&v.to_le_bytes());
             }
         }
@@ -420,7 +432,7 @@ fn encode_into(dst: &mut [u8], vals: &[f32], dtype: DType) {
                     return;
                 }
             }
-            for (c, &v) in dst.chunks_exact_mut(2).zip(vals) {
+            for (c, &v) in dst.as_chunks_mut::<2>().0.iter_mut().zip(vals) {
                 c.copy_from_slice(&half::f16::from_f32(v).to_le_bytes());
             }
         }
@@ -433,7 +445,7 @@ fn encode_into(dst: &mut [u8], vals: &[f32], dtype: DType) {
                     return;
                 }
             }
-            for (c, &v) in dst.chunks_exact_mut(2).zip(vals) {
+            for (c, &v) in dst.as_chunks_mut::<2>().0.iter_mut().zip(vals) {
                 c.copy_from_slice(&half::bf16::from_f32(v).to_le_bytes());
             }
         }
@@ -718,8 +730,11 @@ impl ProcessGroup {
             self.transport.send_bytes(next, TAG_ALL_REDUCE, &send)?;
             let incoming = self.transport.recv_bytes(prev, TAG_ALL_REDUCE)?;
             expect_len(incoming.len(), (re - rs) * 8)?;
-            for (a, c) in acc[rs..re].iter_mut().zip(incoming.chunks_exact(8)) {
-                *a = combine64(op, *a, f64::from_le_bytes(c.try_into().unwrap()));
+            for (a, c) in acc[rs..re]
+                .iter_mut()
+                .zip(incoming.as_chunks::<8>().0.iter())
+            {
+                *a = combine64(op, *a, f64::from_le_bytes(*c));
             }
         }
 
@@ -1405,7 +1420,9 @@ mod tests {
     }
     fn f16_vals(bytes: &[u8]) -> Vec<f32> {
         bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32())
             .collect()
     }
@@ -1430,7 +1447,9 @@ mod tests {
             g.all_reduce_typed(&mut bytes, DType::BF16, ReduceKind::Mean)
                 .unwrap();
             let got: Vec<f32> = bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| half::bf16::from_le_bytes([c[0], c[1]]).to_f32())
                 .collect();
             // mean(1,2,3,4) = 2.5, exactly representable in bf16

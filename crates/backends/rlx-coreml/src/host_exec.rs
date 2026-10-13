@@ -683,34 +683,48 @@ fn f32_to_dtype_bytes(f: &[f32], dtype: DType) -> Vec<u8> {
 fn dtype_bytes_to_f32(b: &[u8], dtype: DType) -> Vec<f32> {
     match dtype {
         DType::F32 => b
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect(),
         DType::F64 => b
-            .chunks_exact(8)
-            .map(|c| f64::from_le_bytes(c.try_into().unwrap()) as f32)
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| f64::from_le_bytes(*c) as f32)
             .collect(),
         DType::I64 => b
-            .chunks_exact(8)
-            .map(|c| i64::from_le_bytes(c.try_into().unwrap()) as f32)
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| i64::from_le_bytes(*c) as f32)
             .collect(),
         DType::I32 => b
-            .chunks_exact(4)
-            .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f32)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| i32::from_le_bytes(*c) as f32)
             .collect(),
         DType::I16 => b
-            .chunks_exact(2)
-            .map(|c| i16::from_le_bytes(c.try_into().unwrap()) as f32)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| i16::from_le_bytes(*c) as f32)
             .collect(),
         DType::I8 => b.iter().map(|&x| x as i8 as f32).collect(),
         DType::U32 => b
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes(c.try_into().unwrap()) as f32)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c) as f32)
             .collect(),
         DType::U8 | DType::Bool => b.iter().map(|&x| x as f32).collect(),
         _ => b
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect(),
     }
 }
@@ -748,7 +762,9 @@ fn run_custom_f32(
             .execute(&in_refs, (&mut out_bytes, &out_shape), attrs)
             .map_err(|e| CoremlError::Runtime(format!("Op::Custom('{name}'): {e}")))?;
         return Ok(out_bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect());
     }
@@ -990,7 +1006,9 @@ fn run_lstm_f32(
     if carry {
         let read = |off: usize, len: usize| -> Vec<f32> {
             arena[off..off + len * 4]
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect()
         };
@@ -1002,7 +1020,9 @@ fn run_lstm_f32(
     }
     let dst_bytes = &arena[dst_off..dst_off + out_len * 4];
     Ok(dst_bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect())
 }
@@ -1111,7 +1131,9 @@ fn run_gru_f32(
     }
     let dst_bytes = &arena[dst_off..dst_off + out_len * 4];
     Ok(dst_bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect())
 }
@@ -1216,7 +1238,9 @@ fn run_rnn_f32(
     }
     let dst_bytes = &arena[dst_off..dst_off + out_len * 4];
     Ok(dst_bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect())
 }
@@ -1291,7 +1315,9 @@ fn run_mamba2_f32(
     }
     let dst_bytes = &arena[dst_off..dst_off + out_len * 4];
     Ok(dst_bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect())
 }

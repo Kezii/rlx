@@ -250,6 +250,10 @@ impl ExecutableGraph for WgpuExecutableWrapper {
         self.inner.requires_host_execution()
     }
 
+    fn wgpu_host_summary(&self) -> Option<String> {
+        self.inner.host_summary()
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn wgpu_run_async<'a>(
         &'a mut self,
@@ -257,12 +261,18 @@ impl ExecutableGraph for WgpuExecutableWrapper {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<Vec<f32>>, String>> + 'a>>
     {
         if self.inner.requires_host_execution() {
+            // Name what is in the way rather than listing what it might have
+            // been: a conv graph's answer is one `Conv2dHost` per convolution,
+            // which tells a caller whether to change backend or change model.
+            let detail = self
+                .inner
+                .host_summary()
+                .unwrap_or_else(|| "host-executed steps".to_string());
             return Box::pin(async move {
-                Err(
-                    "WebGPU wasm graph contains host-executed ops (GGUF dequant, LSTM, \
-                     collectives, FFT-host, …) — use WebGL fallback or CPU"
-                        .into(),
-                )
+                Err(format!(
+                    "WebGPU wasm cannot run this graph — {detail}. Use WebGL (if the \
+                     graph trains there) or CPU."
+                ))
             });
         }
         Box::pin(async move { Ok(self.inner.run_async(inputs).await) })

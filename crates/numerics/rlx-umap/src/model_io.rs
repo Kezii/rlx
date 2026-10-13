@@ -237,8 +237,8 @@ mod safe {
             let n: usize = view.shape().iter().product();
             let mut data = vec![0f32; n];
             let raw = view.data();
-            for (slot, chunk) in data.iter_mut().zip(raw.chunks_exact(4)) {
-                *slot = f32::from_le_bytes(chunk.try_into().unwrap());
+            for (slot, chunk) in data.iter_mut().zip(raw.as_chunks::<4>().0.iter()) {
+                *slot = f32::from_le_bytes(*chunk);
             }
             tensors.insert(name.to_string(), data);
         }

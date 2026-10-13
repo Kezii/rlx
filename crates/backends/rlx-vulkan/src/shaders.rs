@@ -31,7 +31,9 @@ pub fn words(blob: &[u8]) -> Vec<u32> {
         "rlx-vulkan: SPIR-V blob length {} not a multiple of 4",
         blob.len()
     );
-    blob.chunks_exact(4)
+    blob.as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }

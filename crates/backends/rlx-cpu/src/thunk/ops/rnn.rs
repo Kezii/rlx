@@ -2474,7 +2474,9 @@ pub unsafe fn execute_gated_delta_net_f16(
     unsafe {
         let read_f16 = |off: usize, len: usize| -> Vec<f32> {
             let raw = std::slice::from_raw_parts(base.add(off) as *const u8, len * 2);
-            raw.chunks_exact(2)
+            raw.as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| f16::from_le_bytes([c[0], c[1]]).to_f32())
                 .collect()
         };

@@ -28,8 +28,10 @@ fn bytes(v: &[i32]) -> Vec<u8> {
 }
 
 fn ints(v: &[u8]) -> Vec<i32> {
-    v.chunks_exact(4)
-        .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+    v.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| i32::from_le_bytes(*c))
         .collect()
 }
 

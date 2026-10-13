@@ -235,7 +235,9 @@ pub fn with_f32_view<T>(v: &Value, f: impl FnOnce(&[f32]) -> T) -> Option<T> {
         } else {
             scratch.extend(
                 bytes
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]])),
             );
             f(&scratch)
@@ -266,7 +268,7 @@ pub fn read_f32_into(ctx: &mut Context, v: &Value, what: &str, out: &mut Vec<f32
                     return ctx.throw_type(&format!("{what}: the backing ArrayBuffer is detached"));
                 };
                 out.clear();
-                out.extend(bytes.chunks_exact(8).map(|c| {
+                out.extend(bytes.as_chunks::<8>().0.iter().map(|c| {
                     f64::from_ne_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32
                 }));
                 return Ok(());

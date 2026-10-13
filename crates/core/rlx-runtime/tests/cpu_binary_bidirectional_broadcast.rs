@@ -42,7 +42,9 @@ fn const_f64(g: &mut Graph, data: &[f64], shape: &[usize]) -> rlx_ir::NodeId {
 
 fn decode_f64_vec(bytes: &[u8]) -> Vec<f64> {
     bytes
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|c| {
             let mut buf = [0u8; 8];
             buf.copy_from_slice(c);

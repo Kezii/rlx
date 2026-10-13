@@ -155,7 +155,9 @@ pub fn resolve_weight_uri(uri: &str) -> Result<Vec<f32>, String> {
         Err(needs_model_io("dduf"))
     } else if let Some(path) = uri.strip_prefix("file://") {
         let b = std::fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
-        Ok(b.chunks_exact(4)
+        Ok(b.as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect())
     } else {
@@ -343,15 +345,21 @@ fn read_safetensors_f32(buf: &[u8], name: &str) -> Result<Vec<f32>, String> {
         .ok_or("safetensors: data_offsets out of range")?;
     Ok(match dtype {
         "F32" => raw
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect(),
         "F16" => raw
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]])))
             .collect(),
         "BF16" => raw
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| bf16_to_f32(u16::from_le_bytes([c[0], c[1]])))
             .collect(),
         other => return Err(format!("unsupported safetensors dtype: {other}")),
@@ -427,7 +435,9 @@ mod tests {
         // packed bytes of the F32 tensor are exactly its little-endian f32 bytes.
         let raw = cache.bytes(&format!("gguf://{p}#a")).unwrap();
         let raw_f32: Vec<f32> = raw
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         assert_eq!(raw_f32, a);

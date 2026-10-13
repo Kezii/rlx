@@ -48,37 +48,53 @@ fn reduce(
     // The host picks which mode via the dispatch grid size — see
     // backend.rs::Step::Reduce dispatch logic. Both forms read the
     // same params and write the same output cell.
+    // Branch, never return: the small path's guard is derived from `gid` and is
+    // therefore non-uniform, and a non-uniform return makes every barrier after
+    // it illegal — even the ones in the other arm, which no invocation taking
+    // this path ever reaches. WGSL's uniformity analysis is flow-based and does
+    // not reason about the two arms being mutually exclusive, so Dawn rejected
+    // the whole shader ("'workgroupBarrier' must only be called from uniform
+    // control flow") and Chrome computed zeros. Keeping the small path inside
+    // an `if` with no `return` leaves the barriers below reachable only through
+    // the `else`, whose condition is a uniform buffer value.
     if (params.reduce_dim <= 64u) {
         let cell = gid.x + gid.y * ngs.x * 64u;
-        if (cell >= total_out) { return; }
-        let outer_idx = cell / params.inner;
-        let inner_idx = cell % params.inner;
-        let stride_outer = params.reduce_dim * params.inner;
-        let base = params.in_off + outer_idx * stride_outer + inner_idx;
+        if (cell < total_out) {
+            let outer_idx = cell / params.inner;
+            let inner_idx = cell % params.inner;
+            let stride_outer = params.reduce_dim * params.inner;
+            let base = params.in_off + outer_idx * stride_outer + inner_idx;
 
-        var acc: f32 = arena[base];
-        for (var r: u32 = 1u; r < params.reduce_dim; r = r + 1u) {
-            let v = arena[base + r * params.inner];
-            switch (params.op) {
-                case 0u, 1u: { acc = acc + v; }
-                case 2u:     { acc = max(acc, v); }
-                case 3u:     { acc = min(acc, v); }
-                case 4u:     { acc = acc * v; }
-                default:     {}
+            var acc: f32 = arena[base];
+            for (var r: u32 = 1u; r < params.reduce_dim; r = r + 1u) {
+                let v = arena[base + r * params.inner];
+                switch (params.op) {
+                    case 0u, 1u: { acc = acc + v; }
+                    case 2u:     { acc = max(acc, v); }
+                    case 3u:     { acc = min(acc, v); }
+                    case 4u:     { acc = acc * v; }
+                    default:     {}
+                }
             }
+            if (params.op == 1u) {
+                acc = acc / f32(params.reduce_dim);
+            }
+            arena[params.out_off + outer_idx * params.inner + inner_idx] = acc;
         }
-        if (params.op == 1u) {
-            acc = acc / f32(params.reduce_dim);
-        }
-        arena[params.out_off + outer_idx * params.inner + inner_idx] = acc;
         return;
     }
 
-    // Large-dim path: each workgroup handles one output cell.
-    let cell = wid.x + wid.y * ngs.x;
-    if (cell >= total_out) { return; }
-    let outer_idx = cell / params.inner;
-    let inner_idx = cell % params.inner;
+    // Large-dim path: each workgroup handles one output cell. Its guard is
+    // derived from `workgroup_id`, which is uniform within a workgroup, so the
+    // early return here is legal and the barriers below are reached by every
+    // invocation of any workgroup that gets past it.
+    // Named apart from the small path's `cell`: this one is workgroup-uniform
+    // (it comes from `workgroup_id`), which is exactly what makes the early
+    // return below legal where the other one's would not be.
+    let wg_cell = wid.x + wid.y * ngs.x;
+    if (wg_cell >= total_out) { return; }
+    let outer_idx = wg_cell / params.inner;
+    let inner_idx = wg_cell % params.inner;
     let stride_outer = params.reduce_dim * params.inner;
     let base = params.in_off + outer_idx * stride_outer + inner_idx;
     let tid = lid.x;

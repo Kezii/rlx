@@ -228,7 +228,6 @@ pub fn apply_params(compiled: &mut rlx_runtime::CompiledGraph, meta: &ModelMeta,
     }
 }
 
-#[cfg(any(feature = "webgpu", feature = "webgl"))]
 pub fn apply_browser_params(
     compiled: &mut rlx_runtime::BrowserCompiledGraph,
     meta: &ModelMeta,

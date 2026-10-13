@@ -1253,17 +1253,23 @@ fn load_f32_param(
     let out: Vec<f32> = match view.dtype() {
         safetensors::tensor::Dtype::F32 => view
             .data()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
             .collect(),
         safetensors::tensor::Dtype::F16 => view
             .data()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|chunk| half::f16::from_le_bytes([chunk[0], chunk[1]]).to_f32())
             .collect(),
         safetensors::tensor::Dtype::BF16 => view
             .data()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|chunk| {
                 let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
                 f32::from_bits((bits as u32) << 16)
@@ -1271,7 +1277,9 @@ fn load_f32_param(
             .collect(),
         safetensors::tensor::Dtype::I32 => view
             .data()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|chunk| i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as f32)
             .collect(),
         safetensors::tensor::Dtype::U8 | safetensors::tensor::Dtype::I8 => {

@@ -388,6 +388,7 @@ pub struct WgpuExecutable {
 mod compile;
 mod dispatch;
 mod helpers;
+mod host_plan;
 mod run;
 mod set;
 /// Static-string label for each Step variant — used by the Perfetto
@@ -396,6 +397,8 @@ mod step;
 mod test;
 
 pub(crate) use helpers::*;
+pub(crate) use host_plan::plan as host_plan;
+pub use host_plan::{HostBatch, HostGroup, HostIo, HostPlan, Region};
 pub(crate) use step::*;
 
 /// Process-wide count of packed-BF16 (`matmul_bf16w`) matmul dispatches.

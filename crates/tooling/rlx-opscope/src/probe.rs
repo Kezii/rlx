@@ -227,7 +227,9 @@ pub fn load_tensor(path: &str) -> std::io::Result<(usize, usize, Vec<f32>)> {
     let rows = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize;
     let cols = u32::from_le_bytes([b[4], b[5], b[6], b[7]]) as usize;
     let data: Vec<f32> = b[8..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     Ok((rows, cols, data))

@@ -807,13 +807,17 @@ pub fn run_dequant_grouped_matmul_gguf_gpu(
 
     let x_bytes = arena.read_bytes_range(device, queue, x_byte_off, m * k * 4);
     let x_host: Vec<f32> = x_bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
 
     let idx_bytes = arena.read_bytes_range(device, queue, idx_byte_off, m * 4);
     let idx_host: Vec<f32> = idx_bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
 
@@ -858,7 +862,9 @@ pub fn run_dequant_grouped_matmul_gguf_gpu(
 
     let pack_out_bytes = arena.read_bytes_range(device, queue, pack_out_off, m * n * 4);
     let packed_out: Vec<f32> = pack_out_bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
 

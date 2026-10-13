@@ -23,8 +23,10 @@ fn const_f32(g: &mut Graph, xs: &[f32], dims: &[usize]) -> NodeId {
     )
 }
 fn bytes_to_f32s(b: &[u8]) -> Vec<f32> {
-    b.chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+    b.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect()
 }
 

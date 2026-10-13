@@ -448,14 +448,14 @@ pub(crate) fn atan_poly(x: f32) -> f32 {
 #[inline]
 fn max_abs4(x: &[f32]) -> f32 {
     let mut acc = [0f32; 4];
-    let mut it = x.chunks_exact(4);
-    for ch in &mut it {
+    let (chunks, rem) = x.as_chunks::<4>();
+    for ch in chunks {
         for i in 0..4 {
             acc[i] = acc[i].max(ch[i].abs());
         }
     }
     let mut m = acc[0].max(acc[1]).max(acc[2].max(acc[3]));
-    for &v in it.remainder() {
+    for &v in rem {
         m = m.max(v.abs());
     }
     m

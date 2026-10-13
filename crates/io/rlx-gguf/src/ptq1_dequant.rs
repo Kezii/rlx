@@ -159,7 +159,7 @@ pub fn quantize_ptq1_0(src: &[f32]) -> Result<Vec<u8>> {
     }
 
     let mut out = Vec::with_capacity(ptq1_0_bytes(src.len()).unwrap());
-    for blk in src.chunks_exact(QK_PTQ1_0) {
+    for blk in src.as_chunks::<QK_PTQ1_0>().0 {
         let d = blk.iter().fold(0f32, |a, v| a.max(v.abs()));
         let id = if d > 0.0 { 1.0 / d } else { 0.0 };
 
@@ -218,7 +218,7 @@ pub fn gather_rows_ptq1_0(bytes: &[u8], row_len: usize, indices: &[usize]) -> Re
         }
         let src = &bytes[r * row_bytes..(r + 1) * row_bytes];
         let dst = &mut out[i * row_len..(i + 1) * row_len];
-        for (b, chunk) in src.chunks_exact(PTQ1_0_BLOCK_BYTES).enumerate() {
+        for (b, chunk) in src.as_chunks::<PTQ1_0_BLOCK_BYTES>().0.iter().enumerate() {
             dequant_ptq1_0_block(
                 chunk,
                 (&mut dst[b * QK_PTQ1_0..(b + 1) * QK_PTQ1_0])

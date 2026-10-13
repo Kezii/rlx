@@ -599,7 +599,9 @@ fn resolve_weights(uri: &str, label: &str) -> Vec<f32> {
         // "access local data": read a little-endian f32 tensor from disk.
         match std::fs::read(path) {
             Ok(b) => b
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect(),
             Err(e) => {

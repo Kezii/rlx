@@ -313,23 +313,33 @@ impl CudaExecutable {
                 // as garbage f32 bit-for-bit).
                 let f32_data: Vec<f32> = match node.shape.dtype() {
                     rlx_ir::DType::F32 => data
-                        .chunks_exact(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                         .collect(),
                     rlx_ir::DType::F64 => data
-                        .chunks_exact(8)
-                        .map(|c| f64::from_le_bytes(c.try_into().unwrap()) as f32)
+                        .as_chunks::<8>()
+                        .0
+                        .iter()
+                        .map(|c| f64::from_le_bytes(*c) as f32)
                         .collect(),
                     rlx_ir::DType::I64 => data
-                        .chunks_exact(8)
-                        .map(|c| i64::from_le_bytes(c.try_into().unwrap()) as f32)
+                        .as_chunks::<8>()
+                        .0
+                        .iter()
+                        .map(|c| i64::from_le_bytes(*c) as f32)
                         .collect(),
                     rlx_ir::DType::I32 | rlx_ir::DType::U32 => data
-                        .chunks_exact(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f32)
                         .collect(),
                     rlx_ir::DType::I16 => data
-                        .chunks_exact(2)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
                         .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32)
                         .collect(),
                     rlx_ir::DType::I8 => data.iter().map(|&b| b as i8 as f32).collect(),
@@ -339,7 +349,9 @@ impl CudaExecutable {
                     // f16/bf16/c64: raw bytes already narrower/complex — keep the
                     // bit-reinterpret path.
                     _ => data
-                        .chunks_exact(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                         .collect(),
                 };

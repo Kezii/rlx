@@ -102,8 +102,10 @@ mod safetensors_reader {
                         return Err(anyhow!("F32: bad byte count {}", bytes.len()));
                     }
                     Ok(bytes
-                        .chunks_exact(4)
-                        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| f32::from_le_bytes(*c))
                         .collect())
                 }
                 StDtype::F16 => {
@@ -111,7 +113,9 @@ mod safetensors_reader {
                         return Err(anyhow!("F16: bad byte count {}", bytes.len()));
                     }
                     Ok(bytes
-                        .chunks_exact(2)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
                         .map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32())
                         .collect())
                 }
@@ -120,21 +124,29 @@ mod safetensors_reader {
                         return Err(anyhow!("BF16: bad byte count {}", bytes.len()));
                     }
                     Ok(bytes
-                        .chunks_exact(2)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
                         .map(|c| half::bf16::from_le_bytes([c[0], c[1]]).to_f32())
                         .collect())
                 }
                 StDtype::F64 => Ok(bytes
-                    .chunks_exact(8)
-                    .map(|c| f64::from_le_bytes(c.try_into().unwrap()) as f32)
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|c| f64::from_le_bytes(*c) as f32)
                     .collect()),
                 StDtype::I32 => Ok(bytes
-                    .chunks_exact(4)
-                    .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f32)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| i32::from_le_bytes(*c) as f32)
                     .collect()),
                 StDtype::I64 => Ok(bytes
-                    .chunks_exact(8)
-                    .map(|c| i64::from_le_bytes(c.try_into().unwrap()) as f32)
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|c| i64::from_le_bytes(*c) as f32)
                     .collect()),
                 StDtype::U8 => Ok(bytes.iter().map(|&b| b as f32).collect()),
                 StDtype::I8 => Ok(bytes.iter().map(|&b| b as i8 as f32).collect()),

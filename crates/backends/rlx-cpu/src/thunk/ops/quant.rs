@@ -1546,7 +1546,9 @@ unsafe fn exec_dequant_grouped_mat_mul_mlx_inner(
         };
         let bf16_slab = |bytes: &[u8], e: usize| -> Vec<f32> {
             bytes[e * sb_per_expert * 2..(e + 1) * sb_per_expert * 2]
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| half::bf16::from_le_bytes([c[0], c[1]]).to_f32())
                 .collect()
         };

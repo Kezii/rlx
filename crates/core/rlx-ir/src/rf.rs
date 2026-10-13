@@ -165,7 +165,9 @@ mod tests {
         };
         assert_eq!(data.len(), 2 * 4 * 4, "must carry num_elements * 4 bytes");
         let vals: Vec<f32> = data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         assert_eq!(vals, vec![3.0; 8], "every element must be the literal");

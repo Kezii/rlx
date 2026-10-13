@@ -391,8 +391,10 @@ pub fn run_scan_packed_f32(
         execute_scan_host_desc(arena.as_mut_ptr(), &desc);
     }
     arena[final_off..final_off + out_elems * 4]
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect()
 }
 

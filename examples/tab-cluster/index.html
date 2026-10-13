@@ -1,0 +1,488 @@
+<!doctype html>
+<!--
+  RLX - versatile ML compiler + runtime.
+  Copyright (C) 2026 Eugene Hauptmann, Nataliya Kosmyna.
+  SPDX-License-Identifier: MIT OR Apache-2.0
+
+  Tab cluster: every open tab is a data-parallel rank. The wasm rank runs in a
+  dedicated Worker; ranks find each other over a BroadcastChannel and average
+  gradients each step. Serve with `just serve-web`, then open more tabs.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RLX tab cluster — data-parallel training across browser tabs</title>
+    <style>
+      body { font: 15px/1.5 system-ui, sans-serif; max-width: 52rem; margin: 2.5rem auto; padding: 0 1rem; }
+      h1 { font-size: 1.4rem; } h2 { font-size: 1.05rem; margin-top: 1.6rem; }
+      .row { margin: 0.35rem 0; }
+      .k { color: #666; display: inline-block; min-width: 11rem; vertical-align: top; }
+      .v { font-family: ui-monospace, monospace; }
+      .ok { color: #0a7; } .warn { color: #c70; } .err { color: #c33; }
+      .big { font-size: 1.6rem; font-family: ui-monospace, monospace; }
+      canvas { border: 1px solid #ddd; border-radius: 6px; background: #fafafa; }
+      button { font: inherit; padding: 0.3rem 0.8rem; margin-right: 0.4rem; }
+      label { color: #666; margin-right: 0.8rem; }
+      .note { color: #666; font-size: 0.9rem; }
+      .masthead { display: flex; align-items: center; gap: 1.1rem; flex-wrap: wrap;
+                  padding: 0.9rem 0 1.1rem; border-bottom: 1px solid #e4e8ec;
+                  margin-bottom: 1.2rem; }
+      .masthead img { border-radius: 10px; }
+      .masthead .titles { flex: 1 1 14rem; min-width: 12rem; }
+      .masthead .titles a { font-weight: 600; }
+      .masthead .paper { font-weight: 400; color: #444; }
+      .masthead .authors { color: #666; }
+      .masthead figure { margin: 0; text-align: center; font-size: 0.72rem; color: #666; }
+      .masthead figcaption { margin-top: 0.2rem; }
+      .tok-comment   { color: #6a737d; font-style: italic; }
+      .tok-string    { color: #032f62; }
+      .tok-number    { color: #005cc5; }
+      .tok-keyword   { color: #d73a49; }
+      .tok-constant  { color: #005cc5; }
+      .tok-type      { color: #6f42c1; }
+      .tok-function  { color: #22863a; }
+      .tok-macro,
+      .tok-attribute,
+      .tok-decorator { color: #e36209; }
+      .tok-lifetime  { color: #b31d28; }
+      pre { background: #f6f8fa; padding: 0.8rem; border-radius: 6px; overflow-x: auto;
+            font-size: 0.82rem; line-height: 1.45; border: 1px solid #e4e8ec; }
+      details { margin: 0.5rem 0; }
+      summary { cursor: pointer; padding: 0.3rem 0; }
+
+      /* Long single-token values — join URLs, ICE candidate lines, peer ids —
+         are the main thing that pushes a page wider than a phone. */
+      .v { overflow-wrap: anywhere; }
+      /* The loss curve is declared at 640px; let it shrink instead of forcing
+         a horizontal scrollbar on the whole document. */
+      #curve { width: 100%; max-width: 640px; height: auto; }
+      .row { display: flex; flex-wrap: wrap; gap: 0 0.5rem; }
+      .controls { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center; }
+      .controls label { display: inline-flex; align-items: center; gap: 0.35rem;
+                        margin-right: 0; }
+
+      /* One box per source line, so a wrapped line can hang-indent. */
+      pre .line { display: block; padding-left: 2.4ch; text-indent: -2.4ch; }
+
+      @media (max-width: 640px) {
+        /* Wrap rather than scroll: a 390px screen fits ~52 characters and the
+           examples run to 85, so horizontal scrolling would be the only way to
+           read any of it. */
+        pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.78rem;
+              line-height: 1.5; }
+        pre .line { padding-left: 2ch; text-indent: -2ch; }
+        body { margin: 1rem auto; font-size: 16px; }
+        h1 { font-size: 1.2rem; }
+        /* Stack label over value: 11rem of label plus a monospace value does
+           not fit beside it on a 390px screen. */
+        .k { min-width: 0; display: block; font-size: 0.85rem; }
+        .row { display: block; }
+        .big { font-size: 1.3rem; }
+        .masthead { gap: 0.8rem; padding-bottom: 0.9rem; }
+        .masthead figure { font-size: 0.65rem; }
+        .masthead canvas { width: 88px; height: 88px; }
+        pre { font-size: 0.74rem; padding: 0.6rem; }
+        button { margin-bottom: 0.3rem; }
+        /* Full-width tap targets for the selects and the number of controls. */
+        .controls label { width: 100%; }
+        .controls select, .controls input[type="range"] { flex: 1 1 auto; min-width: 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="masthead">
+      <a href="https://github.com/MIT-RLX/rlx" target="_blank" rel="noopener noreferrer">
+        <!-- Remote avatar: degrades to the alt text offline, which is why the
+             QR codes below are generated locally instead of fetched. -->
+        <img src="https://avatars.githubusercontent.com/u/283288630?s=200&amp;v=4"
+             alt="MIT-RLX" width="56" height="56" />
+      </a>
+      <div class="titles">
+        <a href="https://github.com/MIT-RLX/rlx" target="_blank" rel="noopener noreferrer"
+           >MIT-RLX/rlx</a> ·
+        <a href="https://github.com/MIT-RLX/rlx-models" target="_blank" rel="noopener noreferrer"
+           >rlx-models</a><br />
+        <span class="paper">RLX: A Unified Multi-Backend Tensor Compiler and
+          Distributed Runtime in Rust —
+          <a href="https://arxiv.org/abs/2609.37916" target="_blank" rel="noopener noreferrer"
+             >arXiv:2609.37916</a><br />
+          <span class="authors"
+            ><a href="https://github.com/eugenehp" target="_blank" rel="noopener noreferrer"
+               >Eugene Hauptmann</a>,
+            <a href="https://github.com/nataliyakosmyna/" target="_blank" rel="noopener noreferrer"
+               >Nataliya Kosmyna</a></span></span>
+      </div>
+      <figure>
+        <canvas id="qr-repo" width="104" height="104"
+                style="image-rendering: pixelated; border: 1px solid #ddd; border-radius: 6px;
+                       background: #fff"></canvas>
+        <figcaption>repo</figcaption>
+      </figure>
+      <figure>
+        <canvas id="qr-models" width="104" height="104"
+                style="image-rendering: pixelated; border: 1px solid #ddd; border-radius: 6px;
+                       background: #fff"></canvas>
+        <figcaption>models</figcaption>
+      </figure>
+      <figure>
+        <canvas id="qr-paper" width="104" height="104"
+                style="image-rendering: pixelated; border: 1px solid #ddd; border-radius: 6px;
+                       background: #fff"></canvas>
+        <figcaption>paper</figcaption>
+      </figure>
+    </header>
+
+    <h1>RLX tab cluster — one rank per tab</h1>
+
+    <h2>What makes RLX different</h2>
+    <p>Most stacks treat the browser as an <em>export target</em>: you train
+       with PyTorch or JAX in Python, then convert the model for a separate
+       runtime — transformers.js, ONNX Runtime Web, WebLLM — which can only run
+       it forward. TensorFlow.js does train in a tab, but it is its own
+       JavaScript implementation rather than the compiler that serves your GPUs.
+       RLX is one compiler with one IR: the graph on this page is the same graph,
+       through the same fusion passes and cost models, that targets Metal, CUDA,
+       ROCm and Vulkan natively — 21 backend crates, one description of the
+       model. The browser is a backend, not a conversion step.</p>
+    <p>Two consequences are visible right here. <b>Autodiff lives on that same
+       IR</b>, so this page computes gradients and <em>trains</em> rather than
+       just predicting — the code examples below build a graph and let autodiff
+       rewrite it into a backward graph, identically in Rust, JavaScript and
+       Python. And the <b>distributed runtime is in the same tree</b>, so the
+       cohort you are part of is not demo scaffolding: it is the
+       <code>reduce</code> contract a native multi-GPU job uses, with a browser
+       transport plugged in where TCP normally goes. It is written in Rust with
+       no Python at runtime, which is why the whole thing fits in a wasm bundle.
+       What it is not is as mature as those ecosystems — fewer models, fewer
+       pretrained weights, a much smaller community.</p>
+
+    <h2>This demo</h2>
+    <p>Each tab runs an RLX rank in a Web Worker: it compiles the
+       <b>backward graph</b> once on its own backend — WebGPU, WebGL2 or CPU —
+       computes gradients over <b>its own shard</b> of the dataset, and the
+       cohort averages them. This page is a <b>static site</b>: tabs in one
+       browser find each other over a <code>BroadcastChannel</code>, and
+       <b>other devices</b> join a <b>WebRTC mesh</b> — signalling goes over
+       public relays, but every gradient bucket travels peer-to-peer, so no
+       server of ours is involved at runtime. Gradients go
+       worker&nbsp;→&nbsp;worker and never touch a UI thread. Open another tab
+       and watch samples/s rise.</p>
+
+    <div class="row"><span class="k">Cluster</span><span class="big" id="cohort">—</span></div>
+    <div class="row"><span class="k">Throughput</span><span class="big" id="samples-sec">—</span></div>
+
+    <h2>This rank</h2>
+    <div class="row"><span class="k">Rank id</span><span class="v" id="rank-id">—</span></div>
+    <div class="row"><span class="k">Role</span><span class="v" id="role">—</span></div>
+    <div class="row"><span class="k">Backend</span><span class="v" id="backend">—</span></div>
+    <div class="row"><span class="k">State</span><span class="v" id="state">starting…</span></div>
+    <div class="row"><span class="k">Model</span><span class="v" id="model">—</span></div>
+    <div class="row"><span class="k">Transport</span><span class="v" id="transport">—</span></div>
+    <div class="row"><span class="k">Room</span><span class="v" id="room">— (this browser only)</span></div>
+    <div class="row"><span class="k">Join URL</span><span class="v" id="join-url">—</span></div>
+    <div class="row" id="qr-row" hidden>
+      <span class="k">Scan to join</span>
+      <canvas id="qr" width="180" height="180"
+              style="image-rendering: pixelated; border: 1px solid #ddd; border-radius: 6px;
+                     vertical-align: top; background: #fff"></canvas>
+    </div>
+    <div class="row"><span class="k">ICE preflight</span><span class="v" id="ice-preflight">—</span></div>
+    <div class="row"><span class="k">ICE per peer</span><span class="v" id="ice">—</span></div>
+    <div class="row"><span class="k">Peer ranks</span><span class="v" id="peers">—</span></div>
+    <div class="row"><span class="k">Notes</span><span class="v warn" id="fault">—</span></div>
+
+    <h2>Training</h2>
+    <div class="row"><span class="k">Step</span><span class="v" id="step">—</span></div>
+    <div class="row"><span class="k">Loss (cohort mean)</span><span class="v" id="loss">—</span></div>
+    <div class="row"><span class="k">Step rate</span><span class="v" id="steps-sec">—</span></div>
+    <div class="row"><span class="k">Gradient traffic</span><span class="v" id="comm">—</span></div>
+    <div class="row"><span class="k">Adaptation</span><span class="v" id="policy">—</span></div>
+    <div class="row"><canvas id="curve" width="640" height="120"></canvas></div>
+
+    <h2>Controls</h2>
+    <div class="controls">
+      <label>model
+        <select id="model-select">
+          <option value="mnist-mlp" selected>mnist-mlp (gpu-capable)</option>
+          <option value="mnist-cnn">mnist-cnn (cpu only)</option>
+          <option value="cifar-cnn">cifar-cnn (cpu only)</option>
+          <option value="resnet">resnet (cpu only)</option>
+        </select>
+      </label>
+      <label>backend
+        <select id="backend-select">
+          <option value="auto">auto</option>
+          <option value="webgpu">webgpu</option>
+          <option value="webgl">webgl</option>
+          <option value="cpu">cpu</option>
+        </select>
+      </label>
+      <label>batch
+        <!-- Geometric stepper: the slider moves the *exponent*, so every notch
+             doubles. The hidden input carries the actual number, so `?batch=`
+             can still pass a value that is not a power of two. -->
+        <input id="batch-exp" type="range" min="1" max="16" step="1" value="6" />
+        <span class="v" id="batch-shown">64</span>
+        <input id="batch" type="hidden" value="64" />
+      </label>
+      <label>wire
+        <select id="precision">
+          <option value="f32" selected>f32 — exact</option>
+          <option value="f16">f16 — ½ bytes, 5e-4 err</option>
+          <option value="f8e4m3">f8 e4m3 — ¼ bytes, 6% err</option>
+          <option value="f8e5m2">f8 e5m2 — ¼ bytes, 11% err</option>
+        </select>
+      </label>
+      <label>lr
+        <input id="lr" type="range" min="0.005" max="0.2" step="0.005" value="0.05" />
+        <span class="v" id="lr-shown">0.05</span>
+      </label>
+    </div>
+    <div class="row">
+      <button id="spawn">Open another tab</button>
+      <button id="open-room">Open a room (other devices)</button>
+      <button id="start">Start</button>
+      <button id="stop" disabled>Stop</button>
+    </div>
+    <p class="note">The page autostarts, so changing <em>model</em>,
+       <em>backend</em> or <em>batch</em> and pressing <b>Start</b> reloads into
+       that configuration — a rank is built once and holds compiled-graph state.
+       The learning rate is live, and the <em>leader's</em> value is the one
+       every rank applies. Closing the leader's tab triggers a re-election — any synced
+       rank can take over, because every rank holds identical parameters.</p>
+    <p class="note"><b>Wire precision trades bandwidth for accuracy.</b> A round
+       ships the whole parameter vector, so the format <em>is</em> the
+       bandwidth. Measured on a 2,048-element bucket: <code>f16</code> is 1.96×
+       smaller for 4.6e-4 relative error, and both <code>f8</code> formats are
+       3.85× smaller — e4m3 at 5.9% error, e5m2 at 11%. e4m3 wins here because
+       the per-message dynamic scale already handles range, so e5m2's extra
+       exponent bit buys nothing and costs a mantissa bit. The format id and its
+       scale travel in each message, so ranks set differently still interoperate.</p>
+    <p class="note"><b>Batch size decides which backend wins.</b> Measured on
+       this machine with <code>mnist-mlp</code>, samples/s: at batch 8 CPU does
+       10,300 and WebGPU 3,000 — per-dispatch cost and the async readback
+       dominate when the maths takes microseconds. At batch 64 they draw
+       (14,800 vs 12,700). At batch 256 WebGPU wins 3.5× (40,300 vs 11,400),
+       while the CPU falls off. Hence the default of 64; raise it to see the GPU
+       pull ahead.</p>
+    <p class="note"><b>Backends:</b> only <code>mnist-mlp</code> trains on a GPU
+       in the browser. Every conv model's <em>backward</em> pass lowers to host
+       steps (<code>conv2d_backward_input_host</code>,
+       <code>conv2d_backward_weight_host</code> — 3 of them for
+       <code>mnist-cnn</code>, 12 for <code>resnet</code>), and browser WebGPU
+       refuses any schedule it cannot run entirely on the device; WebGL2 has no
+       conv backward at all. Those ranks therefore resolve to CPU, and say so
+       under <em>Notes</em>. A rank always reports the backend it actually got,
+       never the one it asked for.</p>
+    <p class="note"><b>Adaptation:</b> the step waits for a <em>quorum</em> of
+       buckets rather than all of them once the cohort grows past three, and the
+       heartbeat period stretches with peer count (mesh beat traffic grows as
+       n²). Both are shown live above.</p>
+    <p class="note"><b>Other devices:</b> press <em>Open a room</em> and share
+       the join URL (or the room code) with the second device. Bandwidth is the
+       limit in a mesh — the leader sends parameters to every peer each step, so
+       <code>mnist-cnn</code> (5,258 params, 21 KB a step) crosses a phone link
+       comfortably while <code>mnist-mlp</code> (101,770 params, 398 KB) is
+       chunked and will throttle itself.</p>
+
+
+    <h2>Calling this model from Rust, JavaScript or Python</h2>
+    <p class="note">The same graph, the same three steps — build, compile, run —
+       with autodiff turning the forward graph into a backward one. These are
+       the real APIs, not pseudocode: the Rust shape is
+       <code>src/vision/mnist_mlp.rs</code>, the JavaScript is what this page
+       bundles (<code>pkg/rlx_web.d.ts</code>), the Python mirrors
+       <code>pyrlx/examples/dsl_quickstart.py</code>.</p>
+
+    <details open>
+      <summary><b>JavaScript</b> — in the browser, via wasm</summary>
+<pre data-lang="javascript">import init, {
+  WebGraph, compile_forward, compile_backward,
+} from "./pkg/rlx_web.js";
+
+await init();                     // load the wasm module
+
+// ── describe the model ──
+// 784 → 128 → 10 with softmax cross-entropy. Node ids are
+// plain numbers; `param` marks a tensor as trainable.
+const BATCH = 64;
+const g = new WebGraph("mlp");
+const x      = g.input("x", [BATCH, 784]);
+const labels = g.input("labels", [BATCH]);  // class idx/row
+const w1 = g.param("w1", [784, 128]);
+const b1 = g.param("b1", [128]);
+const w2 = g.param("w2", [128, 10]);
+const b2 = g.param("b2", [10]);
+
+let h = g.matmul(x, w1, [BATCH, 128]);
+h = g.add(h, b1, [BATCH, 128]);
+h = g.relu(h, [BATCH, 128]);
+let logits = g.matmul(h, w2, [BATCH, 10]);
+logits = g.add(logits, b2, [BATCH, 10]);
+
+const perSample = g.softmax_cross_entropy(logits, labels);
+g.set_outputs([g.mean(perSample, 0, [])]);     // scalar loss
+
+// ── call it ──
+// "cpu" → "webgpu", "webgl" or "auto"; same graph.
+const fwd = compile_forward(g, "cpu");
+fwd.set_param("w1", W1); fwd.set_param("b1", B1);
+fwd.set_param("w2", W2); fwd.set_param("b2", B2);
+fwd.feed("x", xs);
+fwd.feed("labels", ys);
+const [loss] = fwd.run();         // output_sizes() is [1]
+
+// ── train it ──
+// Autodiff rewrites the graph: outputs become
+// [loss, dW1, db1, dW2, db2], and a `d_output` seed input
+// appears for ∂loss/∂loss.
+const step = compile_backward(g, [w1, b1, w2, b2], "cpu");
+const sizes = step.output_sizes();
+const weights = [W1, B1, W2, B2];
+const NAMES = ["w1", "b1", "w2", "b2"];
+
+step.feed("x", xs);
+step.feed("labels", ys);
+step.feed("d_output", new Float32Array([1]));
+
+for (let i = 0; i &lt; 100; i++) {
+  NAMES.forEach((n, k) =&gt; step.set_param(n, weights[k]));
+  const out = step.run();           // [loss, grads…] flat
+  let at = sizes[0];
+  weights.forEach((w, k) =&gt; {
+    const n = sizes[k + 1];
+    for (let j = 0; j &lt; n; j++) w[j] -= 0.05 * out[at + j];
+    at += sizes[k + 1];
+  });
+  if (i % 20 === 0) console.log(i, out[0]);
+}
+
+// On WebGPU readback cannot block the loop — await it:
+//   const out = await step.run_async();</pre>
+    </details>
+
+    <details>
+      <summary><b>Rust</b> — native, any backend</summary>
+<pre data-lang="rust">use rlx_autodiff::grad_with_loss;
+use rlx_ir::{op::*, DType, Graph, NodeId, Shape};
+use rlx_optim::{Optimizer, Sgd};
+use rlx_runtime::{Device, Session};
+
+const BATCH: usize = 64;
+
+/// 784 → 10 classifier with softmax cross-entropy. Returns
+/// the graph and the parameters to differentiate wrt.
+fn build_loss() -> (Graph, Vec&lt;NodeId&gt;) {
+    let f = DType::F32;
+    let mut g = Graph::new("mlp");
+    let x = g.input("x", Shape::new(&amp;[BATCH, 784], f));
+    let lbl = g.input("labels", Shape::new(&amp;[BATCH], f));
+    let w = g.param("w", Shape::new(&amp;[784, 10], f));
+    let b = g.param("b", Shape::new(&amp;[10], f));
+
+    let mm = g.matmul(x, w, Shape::new(&amp;[BATCH, 10], f));
+    let shape = Shape::new(&amp;[BATCH, 10], f);
+    let logits = g.binary(BinaryOp::Add, mm, b, shape);
+    let per = g.softmax_cross_entropy_with_logits(logits, lbl);
+    let loss = g.add_node(
+        Op::Reduce {
+            op: ReduceOp::Mean,
+            axes: vec![0],
+            keep_dim: false,
+        },
+        vec![per],
+        Shape::from_dims(&amp;[], f),
+    );
+    g.set_outputs(vec![loss]);
+    (g, vec![w, b])
+}
+
+// ── call it ──
+// `Device::Cpu` → `Metal`, `Cuda`, `WebGpu`, … same graph.
+let (graph, params) = build_loss();
+let mut fwd = Session::new(Device::Cpu).compile(graph.clone());
+fwd.set_param("w", &amp;w_data);
+fwd.set_param("b", &amp;b_data);
+let feed = [("x", &amp;x_data[..]), ("labels", &amp;labels[..])];
+let loss = fwd.run(&amp;feed)[0][0];
+
+// ── train it ──
+// Autodiff rewrites the graph; outputs become [loss, dW, db].
+let backward = grad_with_loss(&amp;graph, &amp;params);
+let mut step = Session::new(Device::Cpu).compile(backward);
+let mut sgd = Sgd::new(0.05);
+
+for _ in 0..100 {
+    step.set_param("w", &amp;w_data);
+    step.set_param("b", &amp;b_data);
+    let outs = step.run(&amp;[
+        ("x", &amp;x_data),
+        ("labels", &amp;labels),
+        ("d_output", &amp;[1.0][..]),   // seed ∂loss/∂loss = 1
+    ]);
+    sgd.step("w", &amp;[784, 10], &amp;mut w_data, &amp;outs[1]);
+    sgd.step("b", &amp;[10], &amp;mut b_data, &amp;outs[2]);
+}</pre>
+    </details>
+
+    <details>
+      <summary><b>Python</b> — via <code>pyrlx</code></summary>
+<pre data-lang="python">import numpy as np
+import pyrlx as rlx
+
+device = rlx.available_devices()[0]   # "cpu", "metal", …
+
+with rlx.graph("mlp") as g:
+    x = g.input("x", [64, 784], "f32")
+    target = g.input("target", [64, 10], "f32")
+    w = g.param("w", [784, 10], "f32")
+    b = g.param("b", [10], "f32")
+
+    y = (x @ w + b).relu()
+    loss = ((y - target) ** 2).mean([0, 1])    # MSE
+    g.outputs = [loss]
+    forward, w_id, b_id = g.raw, w.id, b.id
+
+W = (np.random.randn(784, 10) * 0.02).astype(np.float32)
+B = np.zeros(10, dtype=np.float32)
+xs = np.random.randn(64, 784).astype(np.float32)
+ts = np.zeros((64, 10), dtype=np.float32)
+
+# ── call it ──
+compiled = rlx.Session(device).compile(forward)
+rlx.set_param(compiled, "w", W)
+rlx.set_param(compiled, "b", B)
+(loss,) = rlx.run(compiled, x=xs, target=ts)
+print("loss:", float(loss))
+
+# ── train it ──
+# `grad` returns a graph whose outputs are [loss, dW, db].
+with rlx.graph("mlp") as g2:          # `g.raw` consumed g
+    x = g2.input("x", [64, 784], "f32")
+    target = g2.input("target", [64, 10], "f32")
+    w = g2.param("w", [784, 10], "f32")
+    b = g2.param("b", [10], "f32")
+    y = (x @ w + b).relu()
+    g2.outputs = [((y - target) ** 2).mean([0, 1])]
+    fwd2, ids = g2.raw, [w.id, b.id]
+
+backward = rlx.grad(fwd2, ids)
+step = rlx.Session(device).compile(backward)
+seed = np.ones(1, dtype=np.float32)            # ∂loss/∂loss
+
+for i in range(100):
+    rlx.set_param(step, "w", W)
+    rlx.set_param(step, "b", B)
+    loss, dW, dB = rlx.run(step, x=xs, target=ts, d_output=seed)
+    W -= 0.05 * dW.reshape(W.shape)
+    B -= 0.05 * dB.reshape(B.shape)
+    if i % 20 == 0:
+        print(i, float(loss))</pre>
+    </details>
+
+    <div id="colophon"></div>
+
+    <script type="module" src="./cluster.js"></script>
+  </body>
+</html>

@@ -182,7 +182,9 @@ impl ExecutableGraph for RocmExecutableWrapper {
         }
         if matches!(dtype, rlx_ir::DType::F16 | rlx_ir::DType::BF16) {
             let bits: Vec<u16> = data
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
             let half_dt = match dtype {

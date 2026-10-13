@@ -103,8 +103,10 @@ fn cpu_binary_c64_lanes(
         .remove(0)
         .0;
     // Native C64 bytes → f32 lanes (reinterpret, 2N lanes).
-    out.chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+    out.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect()
 }
 

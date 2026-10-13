@@ -115,14 +115,18 @@ fn promote_shape(shape: &Shape) -> Shape {
 fn widen_constant_bytes(data: &[u8], from: DType) -> Vec<u8> {
     match from {
         DType::F16 => data
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|c| {
                 let v = half::f16::from_le_bytes([c[0], c[1]]).to_f32();
                 v.to_le_bytes()
             })
             .collect(),
         DType::BF16 => data
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|c| {
                 let v = half::bf16::from_le_bytes([c[0], c[1]]).to_f32();
                 v.to_le_bytes()

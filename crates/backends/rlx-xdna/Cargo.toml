@@ -10,7 +10,6 @@ keywords.workspace     = true
 categories.workspace   = true
 readme                 = "README.md"
 repository.workspace   = true
-homepage.workspace     = true
 documentation.workspace = true
 # Detection + seam only: no build script, no SDK. The AIE kernel path (AMD XRT
 # + amdxdna shim + an AIE-compiled kernel image) plugs into `ensure_executable`

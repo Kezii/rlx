@@ -28,6 +28,9 @@ pub mod kernel_schedule_port;
 #[cfg(feature = "schedule-codegen")]
 pub mod kernel_schedule_emit;
 pub use backend::bf16_packed_dispatch_count;
+/// Host-step planning: what a compiled schedule asks the CPU to do, and which
+/// of those asks are independent enough to share a sync point.
+pub use backend::{HostBatch, HostGroup, HostIo, HostPlan, Region};
 pub mod supported_ops;
 pub mod tuning;
 pub use supported_ops::SUPPORTED_OPS;

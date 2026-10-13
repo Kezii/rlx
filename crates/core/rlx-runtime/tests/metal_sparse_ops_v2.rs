@@ -19,8 +19,10 @@ mod common;
 
 fn bytes_to_f64s(bytes: &[u8]) -> Vec<f64> {
     bytes
-        .chunks_exact(8)
-        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| f64::from_le_bytes(*c))
         .collect()
 }
 fn const_i32(g: &mut Graph, xs: &[i32]) -> NodeId {

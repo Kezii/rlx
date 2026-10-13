@@ -36,48 +36,68 @@ mod common;
 fn decode_reals(bytes: &[u8], dt: DType) -> Vec<f64> {
     match dt {
         DType::F32 => bytes
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()) as f64)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b) as f64)
             .collect(),
         DType::F64 => bytes
-            .chunks_exact(8)
-            .map(|b| f64::from_le_bytes(b.try_into().unwrap()))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|b| f64::from_le_bytes(*b))
             .collect(),
         DType::F16 => bytes
-            .chunks_exact(2)
-            .map(|b| f16::from_le_bytes(b.try_into().unwrap()).to_f32() as f64)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| f16::from_le_bytes(*b).to_f32() as f64)
             .collect(),
         DType::BF16 => bytes
-            .chunks_exact(2)
-            .map(|b| bf16::from_le_bytes(b.try_into().unwrap()).to_f32() as f64)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| bf16::from_le_bytes(*b).to_f32() as f64)
             .collect(),
         DType::I8 => bytes.iter().map(|&b| b as i8 as f64).collect(),
         DType::I16 => bytes
-            .chunks_exact(2)
-            .map(|b| i16::from_le_bytes(b.try_into().unwrap()) as f64)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| i16::from_le_bytes(*b) as f64)
             .collect(),
         DType::I32 => bytes
-            .chunks_exact(4)
-            .map(|b| i32::from_le_bytes(b.try_into().unwrap()) as f64)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| i32::from_le_bytes(*b) as f64)
             .collect(),
         DType::I64 => bytes
-            .chunks_exact(8)
-            .map(|b| i64::from_le_bytes(b.try_into().unwrap()) as f64)
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|b| i64::from_le_bytes(*b) as f64)
             .collect(),
         DType::U8 => bytes.iter().map(|&b| b as f64).collect(),
         DType::U32 => bytes
-            .chunks_exact(4)
-            .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as f64)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| u32::from_le_bytes(*b) as f64)
             .collect(),
         DType::Bool => bytes.iter().map(|&b| (b != 0) as u8 as f64).collect(),
         // Interleaved [re, im] f32 lanes — keep the real part.
         DType::C64 => bytes
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .map(|b| f32::from_le_bytes(b[0..4].try_into().unwrap()) as f64)
             .collect(),
         // Interleaved [re, im] f64 lanes (16 B/elem) — keep the real part.
         DType::C128 => bytes
-            .chunks_exact(16)
+            .as_chunks::<16>()
+            .0
+            .iter()
             .map(|b| f64::from_le_bytes(b[0..8].try_into().unwrap()))
             .collect(),
     }
@@ -169,8 +189,10 @@ fn metal_cast_f32_to_c64() {
     assert_eq!(*mdt, DType::C64);
     assert_eq!(cb, mb, "f32->c64 raw bytes diverge");
     let lanes: Vec<f32> = mb
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
         .collect();
     assert_eq!(
         lanes,

@@ -13,7 +13,9 @@ use rlx_ir::{Graph, NodeId, Op};
 use std::collections::HashMap;
 
 fn decode_f32(data: &[u8]) -> Vec<f32> {
-    data.chunks_exact(4)
+    data.as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }

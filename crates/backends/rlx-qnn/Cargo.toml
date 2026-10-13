@@ -10,7 +10,6 @@ keywords.workspace     = true
 categories.workspace   = true
 readme                 = "README.md"
 repository.workspace   = true
-homepage.workspace     = true
 documentation.workspace = true
 # Library crate + a single emit binary. No proc-macro, no build script.
 # The QNN C++ is composed in pure Rust; no SDK headers on disk. The emitted

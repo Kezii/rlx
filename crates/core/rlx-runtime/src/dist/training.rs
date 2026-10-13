@@ -496,7 +496,9 @@ fn resolve_shard<W: FnMut(&str) -> Vec<f32>>(
                 && f.read_exact(&mut buf).is_ok()
             {
                 return buf
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                     .collect();
             }

@@ -642,6 +642,13 @@ license-headers:
 new-op NAME *ARGS:
     python3 scripts/new-op.py {{NAME}} {{ARGS}}
 
+# Assemble the tab-cluster demo as a standalone static site, deployable to any
+# static host with no backend. Files are discovered from the page's real
+# dependency graph and the result self-checks, so a missed reference fails here
+# instead of in a browser.
+build-cluster-site out="examples/tab-cluster":
+    python3 crates/bindings/rlx-web/tools/build_site.py --out {{out}}
+
 # Cross-compile gate: the CPU + WebGPU stack must build for the browser
 # (wasm32-unknown-unknown). Compile-only — running models in a browser is
 # done via `just serve-web`.
@@ -652,6 +659,27 @@ check-wasm:
     cargo check -p rlx-web --target wasm32-unknown-unknown --features webgpu,webgl
     # rlx-webgl's planner + CPU executor are verified natively against autodiff.
     cargo test -p rlx-webgl
+    # No WGSL kernel may return from non-uniform control flow before a barrier:
+    # naga/Metal accepts it, every browser's Dawn rejects the shader, and the
+    # backend then computes zeros without erroring.
+    cargo test -p rlx-wgpu --test wgsl_uniform_control_flow
+    # The tab cluster's rank math (sharded gradients average to the full batch).
+    cargo test -p rlx-web --lib cluster
+    # The tab cluster's coordination protocol, in Node against a stub rank: its
+    # failure modes (split brain, a stale joiner, a cohort stalled on a stopped
+    # tab) all produce plausible-looking training rather than an error.
+    # Skipped rather than failed where node is absent: `just ci` runs on
+    # machines that have no business installing a JS runtime.
+    # The bus test covers the transport path end to end except WebRTC itself:
+    # the wire format at every header alignment, real transfer semantics, and a
+    # cohort training through the encoded proxy hop.
+    command -v node >/dev/null 2>&1 \
+      && node --test crates/bindings/rlx-web/tests/cluster_protocol.test.mjs \
+                     crates/bindings/rlx-web/tests/cluster_bus.test.mjs \
+                     crates/bindings/rlx-web/tests/cluster_mesh.test.mjs \
+                     crates/bindings/rlx-web/tests/cluster_qr.test.mjs \
+                     crates/bindings/rlx-web/tests/cluster_highlight.test.mjs \
+      || echo 'node not found — skipping tab-cluster protocol tests'
 
 # Cross-compile gate: the Apple on-device stack must build for every Apple
 # platform, device *and* simulator. The native backends are rlx-cpu

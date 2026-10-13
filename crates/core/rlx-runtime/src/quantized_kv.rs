@@ -385,7 +385,7 @@ fn dequant_rows(bytes: &[u8], scheme: KvQuant, n: usize) -> Result<Vec<f32>> {
                 bail!("F16 dequant: {} bytes < {} expected", bytes.len(), n * 2);
             }
             let mut out = Vec::with_capacity(n);
-            for chunk in bytes[..n * 2].chunks_exact(2) {
+            for chunk in bytes[..n * 2].as_chunks::<2>().0 {
                 let h = half::f16::from_le_bytes([chunk[0], chunk[1]]);
                 out.push(h.to_f32());
             }

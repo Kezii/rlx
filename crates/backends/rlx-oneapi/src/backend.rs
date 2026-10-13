@@ -2630,31 +2630,45 @@ fn binop_id(op: rlx_ir::op::BinaryOp) -> u32 {
 fn widen_const_to_f32(data: &[u8], dt: DType) -> Vec<f32> {
     match dt {
         DType::F32 => data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect(),
         DType::F16 => data
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32())
             .collect(),
         DType::BF16 => data
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| half::bf16::from_le_bytes([c[0], c[1]]).to_f32())
             .collect(),
         DType::F64 => data
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32)
             .collect(),
         DType::I64 => data
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .map(|c| i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32)
             .collect(),
         DType::I32 | DType::U32 => data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f32)
             .collect(),
         DType::I16 => data
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32)
             .collect(),
         DType::I8 => data.iter().map(|&b| b as i8 as f32).collect(),
@@ -2662,7 +2676,9 @@ fn widen_const_to_f32(data: &[u8], dt: DType) -> Vec<f32> {
         // C64 = 2 interleaved f32 lanes `[re, im]`; the host already stores it as
         // f32 pairs, so widening is a pure reinterpret (N complex → 2N lanes).
         DType::C64 => data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect(),
         // C128 = 4 f32 lanes df64 `[re_hi, re_lo, im_hi, im_lo]`, host-stored as
@@ -2678,7 +2694,7 @@ fn widen_const_to_f32(data: &[u8], dt: DType) -> Vec<f32> {
                 [hi, lo]
             };
             let mut out = Vec::with_capacity((data.len() / 16) * 4);
-            for elem in data.chunks_exact(16) {
+            for elem in data.as_chunks::<16>().0 {
                 let re = f64::from_le_bytes(elem[0..8].try_into().unwrap());
                 let im = f64::from_le_bytes(elem[8..16].try_into().unwrap());
                 out.extend_from_slice(&split(re));

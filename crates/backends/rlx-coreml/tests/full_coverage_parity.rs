@@ -354,7 +354,9 @@ fn conjugate_is_mil_native() {
         let ooff = arena.byte_offset(out_id);
         let bytes = &arena.raw_buf()[ooff..ooff + nbytes];
         bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect::<Vec<_>>()
     };
@@ -406,7 +408,9 @@ fn complex_norm_sq_backward_is_mil_native() {
         let nbytes = gc.node(out_id).shape.size_bytes().unwrap();
         let ooff = arena.byte_offset(out_id);
         arena.raw_buf()[ooff..ooff + nbytes]
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect::<Vec<_>>()
     };

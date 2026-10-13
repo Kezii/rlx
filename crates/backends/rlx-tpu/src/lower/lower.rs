@@ -3315,11 +3315,15 @@ impl<'a> LowerCtx<'a> {
             QuantScheme::MlxAffine { bits, group_size } => {
                 let bias_bytes = self.gguf_weight_bytes(z_id);
                 let scales: Vec<f32> = scale_bytes
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                     .collect();
                 let biases: Vec<f32> = bias_bytes
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                     .collect();
                 rlx_mlx_io::dequant_affine_f32(

@@ -31,7 +31,9 @@ use rlx_runtime::{Device, Session};
 use wasm_bindgen::prelude::*;
 
 mod api;
+mod cluster;
 mod exec;
+mod graph_api;
 mod mlp;
 mod transformer;
 mod vision;
@@ -269,6 +271,8 @@ fn set_params(
 pub async fn init_webgpu() -> bool {
     rlx_runtime::init_webgpu().await
 }
+
+pub use graph_api::{WebGraph, WebModel, compile_backward, compile_forward};
 
 pub use api::{
     VisionBench, VisionModelInfo, list_vision_models, parse_backend, preferred_backend,

@@ -9,7 +9,6 @@ keywords.workspace     = true
 categories.workspace   = true
 readme                 = "README.md"
 repository.workspace   = true
-homepage.workspace     = true
 documentation.workspace = true
 description = "C ABI for the RLX distributed node — link a mesh worker into iOS, an embedded host, or any non-Rust shell"
 

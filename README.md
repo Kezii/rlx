@@ -259,6 +259,35 @@ let out = net.run(&[("x", &[1.0, 2.0, 3.0, 4.0])]);
 println!("{:?}", out[0]);          // the 2 outputs
 ```
 
+### Browser example — a training cluster across tabs and devices
+
+A standalone static page (no backend) where **every browser tab is a
+data-parallel rank**: each compiles an RLX backward graph in a Web Worker,
+computes gradients over its own shard, and the cohort averages them. Tabs in one
+browser pair over a `BroadcastChannel`; other devices join a WebRTC mesh by
+scanning a QR code, with signalling over public relays and every gradient
+travelling peer-to-peer.
+
+```sh
+just build-cluster-site          # → ./examples/tab-cluster  (deployable as-is)
+just serve-web --open cluster.html
+```
+
+It is the same compiler the native backends use, so the page also shows the
+choices that normally stay invisible:
+
+| Control | What it exposes |
+|---------|-----------------|
+| backend | `cpu` / `webgpu` / `webgl` per rank, and a mixed cohort is visible in the roster |
+| batch | doubling steps, 2 → 65,536; WebGPU only beats CPU above ~64 |
+| wire | `f32` / `f16` / `f8-e4m3` / `f8-e5m2` payloads — 3.1× less traffic at f8, with the error that costs |
+
+The page ends with the same model built three ways — Rust, JavaScript
+(`WebGraph` over wasm) and Python (`pyrlx`) — each describing the graph, letting
+autodiff rewrite it, and training it. Details, measurements and the
+failure modes that shaped it are in
+[`crates/bindings/rlx-web/README.md`](crates/bindings/rlx-web/README.md).
+
 ### Advanced example
 
 Differentiate a graph (reverse mode), let RLX pick the fastest backend actually
@@ -554,6 +583,14 @@ Each crate carries its own `README.md` covering public surface, build
 commands, and internal gotchas. Model crates (`rlx-qwen3`, `rlx-nomic`, …)
 and `rlx-splat` (3D Gaussian splatting) live in sibling repos, keeping RLX
 core model-agnostic.
+
+### Generated example folders
+
+`./examples/` holds assembled, deployable demos — currently
+`examples/tab-cluster/`, built by `just build-cluster-site` from
+`crates/bindings/rlx-web/web/`. The page sources are committed so the folder is
+browsable; its `pkg/` wasm bundle is gitignored as an 8.4 MB build artifact, so
+rebuild it before deploying from a fresh clone.
 
 ## Building from source
 

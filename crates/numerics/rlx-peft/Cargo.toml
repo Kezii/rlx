@@ -10,7 +10,6 @@ keywords = ["peft", "lora", "dora", "oft", "fine-tuning"]
 categories = ["science", "mathematics"]
 readme                 = "README.md"
 repository.workspace   = true
-homepage.workspace     = true
 documentation.workspace = true
 
 [lib]

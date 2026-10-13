@@ -127,7 +127,9 @@ fn tiny_llama_prefill_cpu() {
     assert_eq!(out.1, rlx_ir::DType::F32);
     let logits: Vec<f32> = out
         .0
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     assert_eq!(logits.len(), batch * seq * arch.vocab_size);

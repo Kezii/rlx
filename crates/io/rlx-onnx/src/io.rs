@@ -149,7 +149,7 @@ pub fn typed_bytes_to_tensor(bytes: &[u8], dtype: DType) -> Result<OnnxTensor> {
         DType::F32 => {
             let n = bytes.len() / 4;
             let mut v = Vec::with_capacity(n);
-            for chunk in bytes.chunks_exact(4) {
+            for chunk in bytes.as_chunks::<4>().0 {
                 v.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
             }
             OnnxTensor::F32(v)
@@ -157,15 +157,15 @@ pub fn typed_bytes_to_tensor(bytes: &[u8], dtype: DType) -> Result<OnnxTensor> {
         DType::I64 => {
             let n = bytes.len() / 8;
             let mut v = Vec::with_capacity(n);
-            for chunk in bytes.chunks_exact(8) {
-                v.push(i64::from_le_bytes(chunk.try_into().unwrap()));
+            for chunk in bytes.as_chunks::<8>().0 {
+                v.push(i64::from_le_bytes(*chunk));
             }
             OnnxTensor::I64(v)
         }
         DType::I32 => {
             let n = bytes.len() / 4;
             let mut v = Vec::with_capacity(n);
-            for chunk in bytes.chunks_exact(4) {
+            for chunk in bytes.as_chunks::<4>().0 {
                 v.push(i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
             }
             OnnxTensor::I32(v)

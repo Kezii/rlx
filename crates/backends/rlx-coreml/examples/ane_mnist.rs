@@ -167,7 +167,9 @@ mod imp {
             panic!("read weights {wpath}: {e} (run the trainer with RLX_F32_DUMP={wpath})")
         });
         let all: Vec<f32> = wbytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         let total: usize = PARAMS.iter().map(|(_, n)| *n).sum();

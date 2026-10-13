@@ -88,7 +88,9 @@ fn decode_predicate(data: &[u8], dtype: DType, want: usize) -> Option<Vec<bool>>
     let bits: Vec<bool> = match dtype {
         DType::Bool => data.iter().map(|&b| b != 0).collect(),
         DType::F32 => data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]) != 0.0)
             .collect(),
         _ => return None,
@@ -97,7 +99,9 @@ fn decode_predicate(data: &[u8], dtype: DType, want: usize) -> Option<Vec<bool>>
 }
 
 fn decode_f32(data: &[u8]) -> Vec<f32> {
-    data.chunks_exact(4)
+    data.as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }

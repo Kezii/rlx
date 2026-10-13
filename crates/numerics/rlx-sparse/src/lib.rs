@@ -2268,13 +2268,17 @@ mod mlx_kernels {
 
     /// Reinterpret a byte buffer as f64. Length is byte-count / 8.
     fn bytes_to_f64(b: &[u8]) -> Vec<f64> {
-        b.chunks_exact(8)
-            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+        b.as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| f64::from_le_bytes(*c))
             .collect()
     }
     fn bytes_to_i32(b: &[u8]) -> Vec<i32> {
-        b.chunks_exact(4)
-            .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+        b.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| i32::from_le_bytes(*c))
             .collect()
     }
     fn f64_to_bytes(xs: &[f64]) -> Vec<u8> {

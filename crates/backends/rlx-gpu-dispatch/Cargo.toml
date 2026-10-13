@@ -10,7 +10,6 @@ keywords = ["gpu", "dispatch", "autotune", "rlx", "kernels"]
 categories.workspace   = true
 readme                 = "README.md"
 repository.workspace   = true
-homepage.workspace     = true
 documentation.workspace = true
 
 # Deliberately dependency-free. This crate holds DECISIONS (which physical

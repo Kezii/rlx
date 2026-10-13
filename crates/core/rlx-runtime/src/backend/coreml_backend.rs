@@ -130,12 +130,16 @@ impl ExecutableGraph for CoremlExecutableWrapper {
             .map(|(name, data, dt)| {
                 let v: Vec<f32> = match dt {
                     DType::I64 => data
-                        .chunks_exact(8)
-                        .map(|c| i64::from_le_bytes(c.try_into().unwrap()) as f32)
+                        .as_chunks::<8>()
+                        .0
+                        .iter()
+                        .map(|c| i64::from_le_bytes(*c) as f32)
                         .collect(),
                     DType::I32 => data
-                        .chunks_exact(4)
-                        .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f32)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| i32::from_le_bytes(*c) as f32)
                         .collect(),
                     DType::U8 | DType::Bool => data.iter().map(|&b| b as f32).collect(),
                     _ => super::widen_bytes_to_f32(data, *dt),

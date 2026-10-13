@@ -10,7 +10,6 @@ keywords.workspace     = true
 categories.workspace   = true
 readme                 = "README.md"
 repository.workspace   = true
-homepage.workspace     = true
 documentation.workspace = true
 # Discovery + transport only: no build script, no SDK. macOS grants no in-tree
 # path to a PCIe GPU, so the device-bring-up stage (`am` / `nv`) hangs off the

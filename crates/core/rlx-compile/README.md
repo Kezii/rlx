@@ -28,6 +28,51 @@ The runtime uses the same legalization path as compile; see the root
 [`README.md`](../../../README.md#kernel-dispatch-and-transparency) for env vars
 (`RLX_DISPATCH_REPORT`, `RLX_KERNEL_DISPATCH`).
 
+## Op sharding — decompose, price the IO, choose where
+
+[`shard`](src/shard.rs) cuts a single op into pieces that have no data
+dependency on each other, so they can run on separate threads, devices or
+nodes:
+
+```rust
+use rlx_compile::shard::{choose, shardings, LinkCost, Residency, WorkerCost};
+
+let options = shardings(&graph, node, 4);          // ways to cut it
+let pick = choose(&options, &workers, link, Residency { shared_resident: true }, local_rate);
+```
+
+Three questions, and nothing else:
+
+1. **Which axis, into what pieces.** A conv can be cut by batch or by output
+   channel; a matmul by rows or columns. Ranges are contiguous, disjoint and
+   cover the axis exactly — a gap or an overlap would silently drop or
+   double-count samples.
+2. **What it costs in bytes.** The axes differ in *which operand gets
+   replicated*, and that is usually the whole story: a batch split replicates
+   the weights, an out-channel split replicates the activations. Sliced
+   operands cross a link once in total; shared ones cross once per worker,
+   unless `Residency { shared_resident: true }` says they are already there —
+   which is the data-parallel case, and it changes the answer.
+3. **Where to run it.** `choose` scores the slowest shard's compute against the
+   transfer, and returns `None` for "run it whole" when no split beats that. A
+   worker whose cost model is not rankable is **excluded and reported**, by the
+   same `CostCalibration::is_rankable` rule device ranking already follows.
+
+The module performs no graph surgery: `ShardOption` names the operand, axis and
+ranges, and the caller emits narrows and a concat, or ships ranges to workers.
+It also defines its own `LinkCost`/`WorkerCost` rather than importing
+`rlx_collectives::planner::Link` or `rlx_runtime::BackendCostModel`, which both
+sit above this crate — `rlx_runtime::shard_placement` is the adapter.
+
+**Exact, but not always bit-identical.** Every option preserves the maths, yet
+the backend may block a narrower shape differently: batch and row splits came
+back bit-identical, while out-channel and column splits agreed to ~5e-7. A
+cohort that relies on every worker holding identical values must shard along
+batch/rows. Executed and checked in
+`rlx-runtime/tests/shard_equivalence.rs` — each option is run the way a worker
+would be fed it (given only its slice) and recombined, because a shard handed
+the wrong slice still returns numbers.
+
 ## Install
 
 ```toml

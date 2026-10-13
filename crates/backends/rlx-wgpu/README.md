@@ -137,6 +137,106 @@ next device-reading step.
 `ElementwiseRegion` on wgpu (region kernel only supports trailing broadcast).
 `Activation::Gelu` uses exact `erf` in `unary.wgsl` (not the tanh approx).
 
+## WGSL uniform control flow (browser vs native)
+
+WGSL requires `workgroupBarrier()` to be reached in **uniform control flow**. A
+`return` gated on `global_invocation_id` breaks that, and who notices depends on
+the toolchain:
+
+| Toolchain | Behaviour |
+|-----------|-----------|
+| naga → Metal/Vulkan | accepts it — native tests pass |
+| Dawn (every browser) | rejects the **shader module**: *"'workgroupBarrier' must only be called from uniform control flow"* |
+| FXC (DirectX) | rejects it as X4026 |
+
+The browser failure mode is the dangerous one. Dawn invalidates the module, so
+every pipeline built from it is invalid and every dispatch fails — but
+`run_async` still resolves, and the arena keeps whatever was in it. A browser
+rank therefore reported `webgpu`, trained on a loss of **exactly 0.0000**, and
+fed that into a cluster's gradient average. No panic, no error, no wrong-looking
+numbers until you ask what ln(10) should be.
+
+`matmul.wgsl` already carried the fix and a comment about FXC;
+`matmul_f16w`/`matmul_f16_compute` were written later and missed it, and
+`reduce` acquired it with its tree-reduction path. The pattern:
+
+```wgsl
+// Wrong: a `gid`-gated return makes every later barrier non-uniform.
+let bz = gid.z;
+if (bz >= params.batch) { return; }
+
+// Right: workgroup_id is workgroup-uniform, and out-of-range invocations
+// still reach the barriers with their stores guarded.
+let bz = wid.z;
+let in_batch = bz < params.batch;
+let bz_safe = select(0u, bz, in_batch);
+```
+
+Where the index is genuinely per-invocation (`reduce`'s small path), branch
+instead of returning: WGSL's uniformity analysis is flow-based and will not
+reason about two arms being mutually exclusive, so one non-uniform `return`
+anywhere before a barrier condemns the whole entry point — including barriers
+in the arm that invocation never enters.
+
+A comment in one shader did not stop this spreading to three, so
+`tests/wgsl_uniform_control_flow.rs` checks every kernel: it strips comments,
+resolves which names derive from `global_invocation_id`, and walks each
+function's enclosing `if` conditions. It also self-tests — one case asserting it
+catches the exact shape that broke Chrome, one asserting it does not flag the
+legal workgroup-uniform forms. In `just check-wasm`.
+
+## Host-executed steps, and planning around them
+
+Some ops lower to a **host step**: the executor ends its compute pass, submits,
+reads the step's inputs back, computes on the CPU, and writes the result into
+the arena before the next pass. Each one is a sync point. A convolution is one
+of them (`Step::Conv2dHost`), so a conv graph is not a pure GPU schedule even
+though it compiles like one.
+
+[`HostPlan`](src/backend/host_plan.rs) describes that side of a compiled
+schedule — reachable as `WgpuExecutable::host_plan()`, or as one line from
+`host_summary()`:
+
+```text
+2 of 57 steps run on the host in 1 sync point (Conv2dHost×2); 2 are
+independent (2 sync points if run one at a time)
+```
+
+It answers two questions the executor previously could not:
+
+- **What is on the host.** Callers had a single bit
+  (`requires_host_execution()`), which is why the browser WebGPU refusal could
+  only list the ops it *might* have been — "GGUF dequant, LSTM, collectives,
+  FFT-host, …" — when the real answer was one `Conv2dHost` per convolution.
+  The refusal now names the steps, so a caller knows whether to change backend
+  or change model. Surfaced through `ExecutableGraph::wgpu_host_summary()` →
+  `CompiledGraph::host_execution_summary()`, native as well as wasm.
+- **Which of them are independent.** Consecutive host steps pay for one sync
+  point each even when they have nothing to do with each other. Two can share
+  one only if neither reads a byte range the other writes, so the plan groups a
+  run of host steps into batches and marks a batch `parallel` when that is
+  *proven*.
+
+Region knowledge is deliberately partial: `Conv2dHost` and `BufferCopy` carry
+explicit arena offsets and full shapes, so their reads and writes are exact;
+every other host step reports `HostIo::Unknown` and plans as a barrier. Adding
+a kind is one match arm. Until then the conservative answer is the correct one
+— a wrong independence claim reorders reads and writes into the same arena
+bytes and produces plausible, wrong numbers, which is the failure mode this
+backend's host-cache mirror has already produced once (see *Gotchas*).
+
+A single host step that is too big for one worker can be cut further:
+[`rlx_compile::shard`](../../core/rlx-compile/src/shard.rs) splits one conv or
+matmul into independent pieces, prices each axis by bytes moved, and picks a
+placement. `HostPlan` says *which steps* can share a sync point; `shard` says
+*how to divide one step* across workers.
+
+**The plan is not yet acted on.** Execution still runs host steps one at a
+time; `parallel: true` marks what *could* share a sync point. Doing it means
+gathering a batch's reads once, computing concurrently, and writing back once —
+inside the host-step arm of `run_inner`, whose host-cache flush ordering is
+load-bearing.
+
 ## Build / test
 
 ```sh

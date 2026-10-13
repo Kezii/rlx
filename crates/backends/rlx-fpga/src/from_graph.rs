@@ -565,7 +565,9 @@ fn load_i32_tensor_opt(
                 ));
             }
             let v: Vec<i32> = data
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect();
             Ok(Some(v))
@@ -617,7 +619,7 @@ fn load_requant(
                 ));
             }
             let mut out = Vec::with_capacity(data.len() / 8);
-            for chunk in data.chunks_exact(8) {
+            for chunk in data.as_chunks::<8>().0 {
                 let m0 = i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
                 let sh = i32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
                 out.push((m0, sh));
@@ -636,7 +638,9 @@ fn load_i32_const(g: &Graph, id: NodeId, key: &str) -> Result<Vec<i32>, String> 
                 return Err(format!("{key}: byte len not multiple of 4"));
             }
             Ok(data
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect())
         }

@@ -70,22 +70,30 @@ fn f_to_f32(ctx: &mut Context, _this: &Value, args: &[Value], _m: i32) -> JsResu
                 .collect::<Vec<_>>()
         }),
         Some(ElementType::Int16) => with_view_bytes(&source, |b| {
-            b.chunks_exact(2)
+            b.as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| affine(i16::from_ne_bytes([c[0], c[1]]) as f32))
                 .collect::<Vec<_>>()
         }),
         Some(ElementType::Uint16) => with_view_bytes(&source, |b| {
-            b.chunks_exact(2)
+            b.as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| affine(u16::from_ne_bytes([c[0], c[1]]) as f32))
                 .collect::<Vec<_>>()
         }),
         Some(ElementType::Int32) => with_view_bytes(&source, |b| {
-            b.chunks_exact(4)
+            b.as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| affine(i32::from_ne_bytes([c[0], c[1], c[2], c[3]]) as f32))
                 .collect::<Vec<_>>()
         }),
         Some(ElementType::Uint32) => with_view_bytes(&source, |b| {
-            b.chunks_exact(4)
+            b.as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| affine(u32::from_ne_bytes([c[0], c[1], c[2], c[3]]) as f32))
                 .collect::<Vec<_>>()
         }),
@@ -93,7 +101,9 @@ fn f_to_f32(ctx: &mut Context, _this: &Value, args: &[Value], _m: i32) -> JsResu
             v.iter().map(|x| affine(*x)).collect::<Vec<_>>()
         }),
         Some(ElementType::Float64) => with_view_bytes(&source, |b| {
-            b.chunks_exact(8)
+            b.as_chunks::<8>()
+                .0
+                .iter()
                 .map(|c| {
                     affine(
                         f64::from_ne_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32,

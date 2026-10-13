@@ -348,7 +348,7 @@ impl<'a> Machine<'a> {
                         bail!("pickle: SETITEMS with odd count");
                     }
                     self.with_dict_top(|d| {
-                        for pair in items.chunks_exact(2) {
+                        for pair in items.as_chunks::<2>().0 {
                             d.push((pair[0].clone(), pair[1].clone()));
                         }
                     })?;

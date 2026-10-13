@@ -174,7 +174,6 @@ rust-version  = "1.89"  # edition=2024 needs ≥1.85; `is_multiple_of` ≥1.87; 
 license       = "MIT OR Apache-2.0"
 authors       = ["Eugene Hauptmann", "Nataliya Kosmyna"]
 repository    = "https://github.com/MIT-RLX/rlx"
-homepage      = "https://github.com/MIT-RLX/rlx"
 documentation = "https://docs.rs/rlx"
 keywords      = ["ml", "tensor", "compiler", "neural-network", "autodiff"]
 categories    = ["science", "algorithms", "compilers"]
@@ -277,6 +276,23 @@ large_enum_variant          = "allow"  # Op enum carries Box<Graph> in CustomFn 
 single_range_in_vec_init    = "allow"  # `vec![0..1]` is fine in tests / scaffolding
 collapsible_if              = "allow"  # nested-if is often more readable in numeric code
 should_implement_trait      = "allow"  # builder methods named like trait methods
+
+# Cargo manifest lints (new warn-by-default set as of Rust 1.100). Both allows
+# below are deliberate design, not deferred cleanup — see the rationale on each.
+[workspace.lints.cargo]
+# `[workspace.dependencies]` is intentionally a COMPLETE registry of every
+# internal crate (see its header comment: "one source of truth for path +
+# version"). 25 entries currently have no member referencing them via
+# `{ workspace = true }`; keeping them means adding a dependency is a one-line
+# edit in the member, not a path+version copy. Dropping them to satisfy the
+# lint would defeat the registry.
+unused_workspace_dependencies = "allow"
+# Feature-plumbing dependencies read as "unused" because no lib code imports
+# them, but the `[features]` table requires them as real dependencies — e.g.
+# `rlx-peft` has `cpu = ["rlx-runtime/cpu"]`, `metal = ["rlx-runtime/metal"]`,
+# … so removing `rlx-runtime` is a hard error and moving it to dev-dependencies
+# would silently break the feature pass-through for downstream consumers.
+unused_dependencies = "allow"
 
 [profile.debug-rlx]
 inherits = "dev"

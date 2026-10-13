@@ -560,24 +560,24 @@ pub(crate) fn compile_static_inner(
         {
             let widened: Option<Vec<u8>> = match node.shape.dtype() {
                 rlx_ir::DType::I64 => Some(
-                    data.chunks_exact(8)
-                        .flat_map(|c| {
-                            (i64::from_le_bytes(c.try_into().unwrap()) as f32).to_le_bytes()
-                        })
+                    data.as_chunks::<8>()
+                        .0
+                        .iter()
+                        .flat_map(|c| (i64::from_le_bytes(*c) as f32).to_le_bytes())
                         .collect(),
                 ),
                 rlx_ir::DType::I32 => Some(
-                    data.chunks_exact(4)
-                        .flat_map(|c| {
-                            (i32::from_le_bytes(c.try_into().unwrap()) as f32).to_le_bytes()
-                        })
+                    data.as_chunks::<4>()
+                        .0
+                        .iter()
+                        .flat_map(|c| (i32::from_le_bytes(*c) as f32).to_le_bytes())
                         .collect(),
                 ),
                 rlx_ir::DType::U32 => Some(
-                    data.chunks_exact(4)
-                        .flat_map(|c| {
-                            (u32::from_le_bytes(c.try_into().unwrap()) as f32).to_le_bytes()
-                        })
+                    data.as_chunks::<4>()
+                        .0
+                        .iter()
+                        .flat_map(|c| (u32::from_le_bytes(*c) as f32).to_le_bytes())
                         .collect(),
                 ),
                 rlx_ir::DType::Bool | rlx_ir::DType::U8 => Some(

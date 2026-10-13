@@ -57,7 +57,9 @@ fn f32_from_raw(raw: &[u8], n: usize) -> Option<Vec<f32>> {
         return None;
     }
     Some(
-        raw.chunks_exact(4)
+        raw.as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect(),
     )
@@ -86,8 +88,10 @@ fn tensor_to_f32(name: &str, t: &TensorProto) -> Result<Vec<f32>> {
                 t.get_int64_data().to_vec()
             } else if t.get_raw_data().len() == n * 8 {
                 t.get_raw_data()
-                    .chunks_exact(8)
-                    .map(|c| i64::from_le_bytes(c.try_into().unwrap()))
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|c| i64::from_le_bytes(*c))
                     .collect()
             } else {
                 Vec::new()
@@ -98,8 +102,10 @@ fn tensor_to_f32(name: &str, t: &TensorProto) -> Result<Vec<f32>> {
             let raw = t.get_raw_data();
             if raw.len() == n * 4 {
                 return Ok(raw
-                    .chunks_exact(4)
-                    .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f32)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| i32::from_le_bytes(*c) as f32)
                     .collect());
             }
         }
@@ -112,7 +118,9 @@ fn tensor_to_f32(name: &str, t: &TensorProto) -> Result<Vec<f32>> {
             let raw = t.get_raw_data();
             if raw.len() == n * 2 {
                 return Ok(raw
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32())
                     .collect());
             }
@@ -122,7 +130,9 @@ fn tensor_to_f32(name: &str, t: &TensorProto) -> Result<Vec<f32>> {
             let raw = t.get_raw_data();
             if raw.len() == n * 2 {
                 return Ok(raw
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|c| f32::from_bits((u32::from(c[0]) | (u32::from(c[1]) << 8)) << 16))
                     .collect());
             }
@@ -149,14 +159,18 @@ fn tensor_to_i64(name: &str, t: &TensorProto) -> Result<Vec<i64>> {
     match t.get_data_type() as i32 {
         7 if raw.len() == n * 8 => {
             return Ok(raw
-                .chunks_exact(8)
-                .map(|c| i64::from_le_bytes(c.try_into().unwrap()))
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|c| i64::from_le_bytes(*c))
                 .collect());
         }
         6 if raw.len() == n * 4 => {
             return Ok(raw
-                .chunks_exact(4)
-                .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as i64)
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| i32::from_le_bytes(*c) as i64)
                 .collect());
         }
         9 => {

@@ -149,13 +149,17 @@ fn flat_f32(out: &[(Vec<u8>, DType)]) -> Vec<f32> {
         match dt {
             DType::F64 => v.extend(
                 bytes
-                    .chunks_exact(8)
-                    .map(|c| f64::from_le_bytes(c.try_into().unwrap()) as f32),
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|c| f64::from_le_bytes(*c) as f32),
             ),
             _ => v.extend(
                 bytes
-                    .chunks_exact(4)
-                    .map(|c| f32::from_le_bytes(c.try_into().unwrap())),
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| f32::from_le_bytes(*c)),
             ),
         }
     }

@@ -10,7 +10,6 @@ repository.workspace   = true
 description = "In-graph collective ops (all-reduce) for tensor-parallel RLX execution"
 keywords.workspace      = true
 categories.workspace    = true
-homepage.workspace      = true
 documentation.workspace = true
 
 [dependencies]

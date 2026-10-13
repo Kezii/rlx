@@ -608,7 +608,9 @@ fn conv_affine_scale_fold_baked_with_bound_weights() {
     };
     // Verify the folded VALUE: w[o,i,h,w]·scale[o] = 0.1·(o+1), per output channel.
     let vals: Vec<f32> = data
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     assert_eq!(vals.len(), co * ci * k * k);

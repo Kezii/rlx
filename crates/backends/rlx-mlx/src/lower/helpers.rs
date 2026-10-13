@@ -1171,8 +1171,10 @@ pub(crate) fn host_eval_indexing_op(
         rlx_cpu::thunk::execute_indexing_thunk_on_bytes(arena.as_mut_ptr(), &thunk);
     }
     let out: Vec<f32> = arena[out_off..out_off + out_n * 4]
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect();
     let out_shape: Vec<usize> = node
         .shape
@@ -1198,9 +1200,11 @@ pub(crate) fn materialize_index_i64_bytes(arr: &Array, n: usize) -> Result<Vec<u
     if b.len() == n * 8 {
         Ok(b)
     } else if b.len() == n * 4 {
-        Ok(b.chunks_exact(4)
+        Ok(b.as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|c| {
-                let x = f32::from_le_bytes(c.try_into().unwrap());
+                let x = f32::from_le_bytes(*c);
                 (x.round() as i64).to_le_bytes()
             })
             .collect())

@@ -27,8 +27,10 @@ fn f32s_to_bytes(xs: &[f32]) -> Vec<u8> {
 }
 fn bytes_to_f32s(bytes: &[u8]) -> Vec<f32> {
     bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect()
 }
 
@@ -41,8 +43,10 @@ fn f64s_to_bytes(xs: &[f64]) -> Vec<u8> {
 }
 fn bytes_to_f64s(bytes: &[u8]) -> Vec<f64> {
     bytes
-        .chunks_exact(8)
-        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| f64::from_le_bytes(*c))
         .collect()
 }
 fn const_f64(g: &mut Graph, xs: &[f64]) -> NodeId {
@@ -609,7 +613,9 @@ fn fft_jvp_matches_forward_of_tangent() {
 
 fn bytes_to_c64_pairs(bytes: &[u8]) -> Vec<(f32, f32)> {
     bytes
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|c| {
             (
                 f32::from_le_bytes(c[..4].try_into().unwrap()),

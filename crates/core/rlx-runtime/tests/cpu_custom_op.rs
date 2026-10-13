@@ -102,8 +102,10 @@ fn f32s_to_bytes(xs: &[f32]) -> Vec<u8> {
 
 fn bytes_to_f32s(bytes: &[u8]) -> Vec<f32> {
     bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect()
 }
 
@@ -247,8 +249,10 @@ fn f64s_to_bytes(xs: &[f64]) -> Vec<u8> {
 
 fn bytes_to_f64s(bytes: &[u8]) -> Vec<f64> {
     bytes
-        .chunks_exact(8)
-        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| f64::from_le_bytes(*c))
         .collect()
 }
 
@@ -608,7 +612,9 @@ fn custom_op_dispatches_f16_kernel_through_full_dtype_match() {
     let bytes = &outs[0].0;
     assert_eq!(bytes.len(), n * 2);
     let y: Vec<f32> = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32())
         .collect();
     let want = [2.0_f32, 2.0, 2.25, 2.5];

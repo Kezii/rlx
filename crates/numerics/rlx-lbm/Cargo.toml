@@ -9,7 +9,6 @@ license.workspace      = true
 keywords = ["lbm", "lattice-boltzmann", "cfd", "rlx", "moment-encoded"]
 categories.workspace   = true
 repository.workspace   = true
-homepage.workspace     = true
 documentation.workspace = true
 readme                  = "README.md"
 

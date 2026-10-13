@@ -79,20 +79,28 @@ fn promote_int_to_f32(graph: &mut Graph) {
             if let Op::Constant { data } = &mut node.op {
                 let floats: Vec<f32> = match dt {
                     DType::I64 => data
-                        .chunks_exact(8)
-                        .map(|c| i64::from_le_bytes(c.try_into().unwrap()) as f32)
+                        .as_chunks::<8>()
+                        .0
+                        .iter()
+                        .map(|c| i64::from_le_bytes(*c) as f32)
                         .collect(),
                     DType::I32 => data
-                        .chunks_exact(4)
-                        .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f32)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| i32::from_le_bytes(*c) as f32)
                         .collect(),
                     DType::U32 => data
-                        .chunks_exact(4)
-                        .map(|c| u32::from_le_bytes(c.try_into().unwrap()) as f32)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| u32::from_le_bytes(*c) as f32)
                         .collect(),
                     DType::I16 => data
-                        .chunks_exact(2)
-                        .map(|c| i16::from_le_bytes(c.try_into().unwrap()) as f32)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|c| i16::from_le_bytes(*c) as f32)
                         .collect(),
                     DType::U8 => data.iter().map(|&b| b as f32).collect(),
                     DType::I8 => data.iter().map(|&b| (b as i8) as f32).collect(),
@@ -156,17 +164,21 @@ fn demote_unsupported_floats(graph: &mut Graph) {
             match dt {
                 DType::F64 => {
                     let f32s: Vec<f32> = data
-                        .chunks_exact(8)
-                        .map(|c| f64::from_le_bytes(c.try_into().unwrap()) as f32)
+                        .as_chunks::<8>()
+                        .0
+                        .iter()
+                        .map(|c| f64::from_le_bytes(*c) as f32)
                         .collect();
                     *data = f32s.iter().flat_map(|f| f.to_le_bytes()).collect();
                 }
                 DType::BF16 => {
                     // bf16 (2 bytes) → f16 (2 bytes), value-preserving via f32.
                     *data = data
-                        .chunks_exact(2)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
                         .flat_map(|c| {
-                            let bf = u16::from_le_bytes(c.try_into().unwrap());
+                            let bf = u16::from_le_bytes(*c);
                             let f = f32::from_bits((bf as u32) << 16);
                             half::f16::from_f32(f).to_le_bytes()
                         })
@@ -454,7 +466,9 @@ impl CoremlExecutable {
     pub fn set_param_typed(&mut self, name: &str, data: &[u8], dtype: DType) {
         if dtype == DType::F32 {
             let floats: Vec<f32> = data
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect();
             self.set_param(name, &floats);
@@ -1025,8 +1039,10 @@ mod tests {
             unreachable!()
         };
         let floats: Vec<f32> = data
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect();
         assert_eq!(floats, vec![1.0, -2.0, 3.0]);
     }

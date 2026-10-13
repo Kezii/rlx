@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -38,6 +39,23 @@ PKG_DIR = WEB_DIR / "pkg"
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     print("·", " ".join(cmd))
     return subprocess.run(cmd, check=True, **kw)
+
+
+# WebAssembly SIMD — opt-in, because it was measured and did nothing.
+#
+# The reasoning for enabling it is sound: wasm has no baseline vector unit the
+# way x86_64 (SSE2) and aarch64 (NEON) do, so the plain-Rust kernels that
+# auto-vectorise natively compile one lane at a time, and the GEMM here is
+# already the pure-Rust fallback (`rlx-cpu`'s BLAS path is an unsatisfiable
+# import on wasm). The measurement disagreed: a cluster rank training
+# `mnist-cnn` in Chrome did 1,244 samples/s scalar and 1,227 with `+simd128` —
+# no change, for a bundle that grew 5.7 MB → 8.6 MB.
+#
+# The actual bottleneck was a clamped `setTimeout(0)` in the round loop
+# (`web/cluster-protocol.js`), worth 4× once fixed. Left as a flag rather than
+# deleted: it should pay off once the kernels are written to vectorise, and the
+# next person should not have to rediscover that it currently does not.
+SIMD_FLAG = "-C target-feature=+simd128"
 
 
 def wasm_bindgen_crate_version() -> str:
@@ -128,6 +146,11 @@ def main() -> None:
         default="python",
         help="static server for --serve (default: python stdlib)",
     )
+    ap.add_argument(
+        "--simd",
+        action="store_true",
+        help="build with wasm SIMD (simd128). Measured as no gain and +50% size; see SIMD_FLAG",
+    )
     ap.add_argument("--debug", action="store_true", help="debug build (default: release)")
     ap.add_argument("--port", type=int, default=8000, help="port for --serve")
     args = ap.parse_args()
@@ -148,7 +171,13 @@ def main() -> None:
         cargo.append("--release")
     if features:
         cargo += ["--features", ",".join(features)]
-    run(cargo, cwd=WORKSPACE)
+
+    env = dict(os.environ)
+    if args.simd:
+        existing = env.get("RUSTFLAGS", "").strip()
+        env["RUSTFLAGS"] = f"{existing} {SIMD_FLAG}".strip()
+        print(f"· RUSTFLAGS={env['RUSTFLAGS']}")
+    run(cargo, cwd=WORKSPACE, env=env)
 
     profile = "debug" if args.debug else "release"
     wasm = target_dir() / TARGET / profile / WASM_ARTIFACT

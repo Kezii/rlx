@@ -946,14 +946,14 @@ pub fn softmax_rows_poly(data: &mut [f32], rows: usize, cols: usize) {
 #[inline]
 fn reduce_max4(row: &[f32]) -> f32 {
     let mut acc = [f32::NEG_INFINITY; 4];
-    let mut it = row.chunks_exact(4);
-    for ch in &mut it {
+    let (chunks, rem) = row.as_chunks::<4>();
+    for ch in chunks {
         for i in 0..4 {
             acc[i] = acc[i].max(ch[i]);
         }
     }
     let mut m = acc[0].max(acc[1]).max(acc[2].max(acc[3]));
-    for &v in it.remainder() {
+    for &v in rem {
         m = m.max(v);
     }
     m
@@ -969,14 +969,14 @@ fn reduce_max4(row: &[f32]) -> f32 {
 #[inline]
 fn reduce_sum4(row: &[f32]) -> f32 {
     let mut acc = [0f32; 4];
-    let mut it = row.chunks_exact(4);
-    for ch in &mut it {
+    let (chunks, rem) = row.as_chunks::<4>();
+    for ch in chunks {
         for i in 0..4 {
             acc[i] += ch[i];
         }
     }
     let mut s = (acc[0] + acc[1]) + (acc[2] + acc[3]);
-    for &v in it.remainder() {
+    for &v in rem {
         s += v;
     }
     s

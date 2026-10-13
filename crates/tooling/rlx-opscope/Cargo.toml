@@ -9,7 +9,6 @@ license.workspace      = true
 keywords.workspace     = true
 categories.workspace   = true
 repository.workspace   = true
-homepage.workspace     = true
 documentation.workspace = true
 # Published like the rest of the rlx crates. It used to be `publish = false`,
 # which forced every consumer in `rlx-models` (rlx-bert, rlx-kimi-k3, rlx-llama4,

@@ -249,8 +249,10 @@ pub fn run_concat_host_pieces_cached(
                 arena.read_bytes_range(device, queue, src_off, (numel as usize).saturating_mul(4));
             Arc::from(
                 bytes
-                    .chunks_exact(4)
-                    .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| f32::from_le_bytes(*c))
                     .collect::<Vec<_>>(),
             )
         };

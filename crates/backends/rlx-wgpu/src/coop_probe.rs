@@ -151,7 +151,7 @@ fn params_bytes(m: u32, k: u32, n: u32, a_off: u32, b_off: u32, c_off: u32) -> [
         0,
     ];
     let mut out = [0u8; 64];
-    for (dst, v) in out.chunks_exact_mut(4).zip(p) {
+    for (dst, v) in out.as_chunks_mut::<4>().0.iter_mut().zip(p) {
         dst.copy_from_slice(&v.to_le_bytes());
     }
     out

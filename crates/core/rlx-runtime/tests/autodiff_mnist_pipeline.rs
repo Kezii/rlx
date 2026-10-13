@@ -100,7 +100,9 @@ fn fill_constants(graph: &Graph, arena: &mut Arena) {
             let want = n * elem;
             if data.len() >= want {
                 let floats: Vec<f32> = data
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                     .collect();
                 write_slot(arena, node.id, &floats);

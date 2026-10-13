@@ -49,19 +49,23 @@ fn decode(src: &[u8], dt: DType, n: usize) -> Vec<Scalar> {
     let mut v = Vec::with_capacity(n);
     match dt {
         DType::F32 => src
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .take(n)
-            .for_each(|c| v.push(Scalar::F(f32::from_le_bytes(c.try_into().unwrap()) as f64))),
+            .for_each(|c| v.push(Scalar::F(f32::from_le_bytes(*c) as f64))),
         DType::F64 => src
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .take(n)
-            .for_each(|c| v.push(Scalar::F(f64::from_le_bytes(c.try_into().unwrap())))),
-        DType::F16 => src.chunks_exact(2).take(n).for_each(|c| {
+            .for_each(|c| v.push(Scalar::F(f64::from_le_bytes(*c)))),
+        DType::F16 => src.as_chunks::<2>().0.iter().take(n).for_each(|c| {
             v.push(Scalar::F(
                 half::f16::from_le_bytes([c[0], c[1]]).to_f32() as f64
             ))
         }),
-        DType::BF16 => src.chunks_exact(2).take(n).for_each(|c| {
+        DType::BF16 => src.as_chunks::<2>().0.iter().take(n).for_each(|c| {
             v.push(Scalar::F(
                 half::bf16::from_le_bytes([c[0], c[1]]).to_f32() as f64
             ))
@@ -71,35 +75,43 @@ fn decode(src: &[u8], dt: DType, n: usize) -> Vec<Scalar> {
             .take(n)
             .for_each(|&b| v.push(Scalar::I(b as i8 as i64))),
         DType::I16 => src
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .take(n)
             .for_each(|c| v.push(Scalar::I(i16::from_le_bytes([c[0], c[1]]) as i64))),
         DType::I32 => src
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .take(n)
-            .for_each(|c| v.push(Scalar::I(i32::from_le_bytes(c.try_into().unwrap()) as i64))),
+            .for_each(|c| v.push(Scalar::I(i32::from_le_bytes(*c) as i64))),
         DType::I64 => src
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .take(n)
-            .for_each(|c| v.push(Scalar::I(i64::from_le_bytes(c.try_into().unwrap())))),
+            .for_each(|c| v.push(Scalar::I(i64::from_le_bytes(*c)))),
         DType::U8 => src
             .iter()
             .take(n)
             .for_each(|&b| v.push(Scalar::I(b as i64))),
         DType::U32 => src
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .take(n)
-            .for_each(|c| v.push(Scalar::I(u32::from_le_bytes(c.try_into().unwrap()) as i64))),
+            .for_each(|c| v.push(Scalar::I(u32::from_le_bytes(*c) as i64))),
         DType::Bool => src
             .iter()
             .take(n)
             .for_each(|&b| v.push(Scalar::I((b != 0) as i64))),
-        DType::C64 => src.chunks_exact(8).take(n).for_each(|c| {
+        DType::C64 => src.as_chunks::<8>().0.iter().take(n).for_each(|c| {
             let re = f32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64;
             let im = f32::from_le_bytes([c[4], c[5], c[6], c[7]]) as f64;
             v.push(Scalar::C(re, im));
         }),
-        DType::C128 => src.chunks_exact(16).take(n).for_each(|c| {
+        DType::C128 => src.as_chunks::<16>().0.iter().take(n).for_each(|c| {
             let re = f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
             let im = f64::from_le_bytes([c[8], c[9], c[10], c[11], c[12], c[13], c[14], c[15]]);
             v.push(Scalar::C(re, im));
@@ -381,8 +393,10 @@ fn c64_roundtrip_real_to_c64_to_real() {
     let (bytes, dt) = &outs[0];
     assert_eq!(*dt, DType::F32);
     let got: Vec<f32> = bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect();
     assert_eq!(
         got,
@@ -481,8 +495,10 @@ fn c128_roundtrip_real_to_c128_to_real() {
     let (bytes, dt) = &outs[0];
     assert_eq!(*dt, DType::F32);
     let got: Vec<f32> = bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect();
     assert_eq!(
         got,

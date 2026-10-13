@@ -104,7 +104,9 @@ fn cpu_run_typed_with_f16_input_widens_and_runs() {
     );
     assert_eq!(bytes.len(), 24, "6 elems × 4 bytes per F32");
     let got: Vec<f32> = bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         .collect();
     let want: Vec<f32> = xs.iter().map(|v| v.max(0.0)).collect();
@@ -127,7 +129,9 @@ fn metal_run_typed_with_f16_input_widens_and_runs() {
     assert_eq!(*dt, DType::F32);
     assert_eq!(bytes.len(), 24);
     let got: Vec<f32> = bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         .collect();
     let want: Vec<f32> = xs.iter().map(|v| v.max(0.0)).collect();
@@ -174,7 +178,9 @@ fn cpu_run_typed_narrows_f16_output_via_cast_thunk() {
     assert_eq!(*dt, DType::F16, "graph output is F16");
     assert_eq!(bytes.len(), 12, "6 elems * 2 bytes per F16");
     let got: Vec<f16> = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|b| f16::from_le_bytes([b[0], b[1]]))
         .collect();
     let want: Vec<f16> = xs.iter().map(|v| f16::from_f32(v.max(0.0))).collect();

@@ -42,8 +42,10 @@ fn f32s(xs: &[f32]) -> Vec<u8> {
 
 fn to_f32(bytes: &[u8]) -> Vec<f32> {
     bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect()
 }
 
