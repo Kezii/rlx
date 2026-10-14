@@ -100,8 +100,6 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
         matches!(weight_bits, 2 | 4 | 8),
         "conv2d: weight_bits must be 2, 4 or 8 (got {weight_bits})"
     );
-    assert_eq!(pad_h, 0, "conv2d: only pad_h=0 supported in first cut");
-    assert_eq!(pad_w, 0, "conv2d: only pad_w=0 supported in first cut");
     assert!(
         !(hints.ternary_fast_path && weight_bits != 2),
         "ternary_fast_path requires weight_bits == 2"
@@ -211,6 +209,7 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
             v.line(&format!(
                 "localparam int KH={kh}, KW={kw}, SH={stride_h}, SW={stride_w};"
             ));
+            v.line(&format!("localparam int PAD_H={pad_h}, PAD_W={pad_w};"));
             v.line(&format!(
                 "localparam int X_ZP={x_zp}, W_ZP={w_zp}, OUT_ZP={out_zp};"
             ));
@@ -232,6 +231,10 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
             // Lane signal is needed by either the ternary fast path or
             // weight_unpack (or both, if we go that route in future).
             v.line("logic [1:0] w_lane_q;");
+            // The weight ROM reads one cycle late; register the lane with it so
+            // the crumb/nibble select matches the byte actually on `w_byte`.
+            v.line("logic [1:0] w_lane;");
+            v.line("always_ff @(posedge clk) w_lane_q <= w_lane;");
             if hints.ternary_fast_path {
                 v.comment("Ternary fast path — direct crumb extraction (no DSP multiplier)");
                 v.line("logic [1:0] w_crumb;");
@@ -270,6 +273,18 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
             }
             v.blank();
 
+            v.comment("Counters");
+            v.line(&format!(
+                "logic [{}:0] oh, ow, oc;",
+                bits_for(h_out.max(w_out).max(c_out)) - 1
+            ));
+            v.line(&format!(
+                "logic [{}:0] kh_i, kw_i;",
+                bits_for(kh.max(kw)) - 1
+            ));
+            v.line(&format!("logic [{}:0] ic;", bits_for(c_in) - 1));
+            v.line("logic signed [31:0] acc;");
+            v.blank();
             // ── Requant table: ROM (per-channel) or localparam (shared) ──
             emit_requant_source(v, name, &requant, hints, c_out, b_addr_bits);
             v.blank();
@@ -301,37 +316,28 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
             }
             if hints.fuses_relu {
                 v.comment("fuses_relu: clamp at OUT_ZP (= relu zero_point)");
-                v.line("assign q_out = (q_raw < OUT_ZP[7:0]) ? OUT_ZP[7:0] : q_raw;");
+                // A part-select is unsigned: without $signed the compare is unsigned
+                // and negative q_raw never clamps.
+                v.line("assign q_out = (q_raw < $signed(OUT_ZP[7:0])) ? $signed(OUT_ZP[7:0]) : q_raw;");
             } else {
                 v.line("assign q_out = q_raw;");
             }
             v.blank();
 
-            v.comment("Counters");
-            v.line(&format!(
-                "logic [{}:0] oh, ow, oc;",
-                bits_for(h_out.max(w_out).max(c_out)) - 1
-            ));
-            v.line(&format!(
-                "logic [{}:0] kh_i, kw_i;",
-                bits_for(kh.max(kw)) - 1
-            ));
-            v.line(&format!("logic [{}:0] ic;", bits_for(c_in) - 1));
-            v.line("logic signed [31:0] acc;");
-            v.blank();
 
             v.comment("Address derivation");
             v.line(&format!("logic [{}:0] in_idx;", in_addr_bits - 1));
             v.line(&format!("logic [{}:0] out_idx;", out_addr_bits - 1));
             v.line(&format!("logic [{}:0] w_idx_logical;", w_log_bits - 1));
+            emit_pad_decls(v, pad_h + pad_w > 0);
             v.always_comb(|v| {
-                v.line("in_idx        = ((oh*SH + kh_i) * W_IN + (ow*SW + kw_i)) * C_IN + ic;");
+                emit_in_idx(v, pad_h + pad_w > 0);
                 v.line("out_idx       = (oh * W_OUT + ow) * C_OUT + oc;");
                 v.line("w_idx_logical = ((oc * KH + kh_i) * KW + kw_i) * C_IN + ic;");
                 emit_byte_addr_lane(
                     v,
                     "w_addr",
-                    "w_lane_q",
+                    "w_lane",
                     "w_idx_logical",
                     w_log_bits,
                     log2_per_byte,
@@ -389,7 +395,7 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
                     v.line("if (state == S_PIPE) begin");
                     v.block(|v| {
                         v.comment("(1) Accumulate the previous cycle's MAC if its read was real.");
-                        v.line("if (prev_valid) acc <= acc + mac_delta;");
+                        v.line("if (prev_valid && !in_pad_q) acc <= acc + mac_delta;");
                         v.comment("(2) If still issuing, advance counters and mark issued.");
                         v.line("if (!done_issuing) begin");
                         v.block(|v| {
@@ -453,12 +459,13 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
                     v.comment("S_PIPE exits when the last MAC has been accumulated:");
                     v.comment("  done_issuing means all reads have been issued; prev_valid means");
                     v.comment("  the data from the very last read is being consumed THIS cycle.");
-                    v.line("S_PIPE      : next = (done_issuing && prev_valid) ? S_WRITE : S_PIPE;");
+                    v.line("S_PIPE      : if (done_issuing && prev_valid) next = S_WRITE; else next = S_PIPE;");
                     v.line("S_WRITE     : begin");
                     v.block(|v| {
                         v.line("y_we = 1'b1;");
-                        v.line("next = (oh == H_OUT - 1 && ow == W_OUT - 1 && oc == C_OUT - 1)");
-                        v.line("       ? S_DONE : S_LOAD_BIAS;");
+                        v.line("if (oh == H_OUT - 1 && ow == W_OUT - 1 && oc == C_OUT - 1)");
+                        v.line("    next = S_DONE;");
+                        v.line("else next = S_LOAD_BIAS;");
                     });
                     v.line("end");
                     v.line("S_DONE      : begin done = 1'b1; if (!start) next = S_IDLE; end");
@@ -606,4 +613,30 @@ pub(crate) fn emit_byte_addr_lane(
         }
         _ => unreachable!("emit_byte_addr_lane: shift must be 0/1/2"),
     }
+}
+
+/// Declarations for [`emit_in_idx`]: `in_pad` (combinational, issue cycle)
+/// and `in_pad_q` (registered, aligned with the BRAM read data).
+pub(crate) fn emit_pad_decls(v: &mut V, padded: bool) {
+    v.line("logic in_pad, in_pad_q;");
+    v.line("always_ff @(posedge clk) in_pad_q <= in_pad;");
+    if padded {
+        v.line("logic signed [31:0] ih_s, iw_s;");
+    }
+}
+
+/// `in_idx` for the current tap. With padding, taps outside the input set
+/// `in_pad` — the accumulate is skipped a cycle later (`in_pad_q`), which is
+/// the reference's "padded input contributes nothing" — and read address 0.
+pub(crate) fn emit_in_idx(v: &mut V, padded: bool) {
+    if !padded {
+        v.line("in_pad = 1'b0;");
+        v.line("in_idx = ((oh*SH + kh_i) * W_IN + (ow*SW + kw_i)) * C_IN + ic;");
+        return;
+    }
+    v.line("ih_s = $signed({1'b0, oh}) * SH + $signed({1'b0, kh_i}) - PAD_H;");
+    v.line("iw_s = $signed({1'b0, ow}) * SW + $signed({1'b0, kw_i}) - PAD_W;");
+    v.line("in_pad = (ih_s < 0) || (ih_s >= H_IN) || (iw_s < 0) || (iw_s >= W_IN);");
+    v.line("if (in_pad) in_idx = '0;");
+    v.line("else in_idx = (ih_s * W_IN + iw_s) * C_IN + ic;");
 }

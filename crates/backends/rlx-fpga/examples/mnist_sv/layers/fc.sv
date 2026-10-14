@@ -28,6 +28,8 @@ module fc_kernel (
     u_w_rom (.clk(clk), .addr(w_addr), .dout(w_byte));
 
     logic [1:0] w_lane_q;
+    logic [1:0] w_lane;
+    always_ff @(posedge clk) w_lane_q <= w_lane;
     // Combinational weight unpack
     logic signed [31:0] w_val;
     weight_unpack #(.BITS(W_BITS), .ENCODING(W_ENC)) u_w_unpack (
@@ -41,6 +43,10 @@ module fc_kernel (
     logic signed [31:0] b_dout;
     block_rom #(.WIDTH(32), .DEPTH(10), .INIT_FILE("weights/fc_b.mem"))
     u_b_rom (.clk(clk), .addr(b_addr), .dout(b_dout));
+
+    logic [3:0] m_i;
+    logic [8:0] k_i;
+    logic signed [31:0] acc;
 
     // Requant ROMs (per-row)
     logic [3:0] r_addr;
@@ -62,16 +68,12 @@ module fc_kernel (
         .q(q_out)
     );
 
-    logic [3:0] m_i;
-    logic [8:0] k_i;
-    logic signed [31:0] acc;
-
     // Address derivation
     logic [11:0] w_idx_logical;
     always_comb begin
         w_idx_logical = m_i * IN_F + k_i;
         w_addr = w_idx_logical;
-        w_lane_q = 2'd0;
+        w_lane = 2'd0;
     end
 
     // Per-cycle MAC delta
@@ -132,10 +134,10 @@ module fc_kernel (
             S_LOAD_BIAS : next = S_BIAS_WAIT;
             S_BIAS_WAIT : next = S_INIT_ACC;
             S_INIT_ACC  : next = S_PIPE;
-            S_PIPE      : next = (done_issuing && prev_valid) ? S_WRITE : S_PIPE;
+            S_PIPE      : if (done_issuing && prev_valid) next = S_WRITE; else next = S_PIPE;
             S_WRITE     : begin
                 y_we = 1'b1;
-                next = (m_i == OUT_F - 1) ? S_DONE : S_LOAD_BIAS;
+                if (m_i == OUT_F - 1) next = S_DONE; else next = S_LOAD_BIAS;
             end
             S_DONE      : begin done = 1'b1; if (!start) next = S_IDLE; end
         endcase

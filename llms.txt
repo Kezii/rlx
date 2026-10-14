@@ -40,6 +40,7 @@ Each crate has its own `README.md`. `rlx-mlx-sys/vendor/mlx` is a git submodule 
 - [docs/rlxp.md](docs/rlxp.md): `.rlxp` flat mmap packs (hybrid tiers, optional graph, sidecars, dist); crate `rlx-pkg`
 - [docs/extending.md](docs/extending.md): extend RLX from a downstream crate via the `rlx-extend` seams
 - [docs/distributed.md](docs/distributed.md) / [docs/iroh-transport.md](docs/iroh-transport.md): distributed training + NAT traversal
+- [docs/fpga-export.md](docs/fpga-export.md) / [docs/bitnet-fpga.md](docs/bitnet-fpga.md): FPGA SystemVerilog export; ternary (BitNet) QAT → openXC7 Xilinx bitstream + UART run
 - [docs/development.md](docs/development.md): contributor workflow
 
 ## Commands

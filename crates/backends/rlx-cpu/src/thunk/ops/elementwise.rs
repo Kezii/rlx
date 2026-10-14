@@ -1884,7 +1884,7 @@ pub(crate) fn exec_activation_in_place(t: &Thunk, base: *mut u8) {
                 Activation::Rsqrt => crate::vmath::vvrsqrtf_inplace(d),
                 Activation::Neg => apply!(|x: f32| -x),
                 Activation::Abs => apply!(|x: f32| x.abs()),
-                Activation::Round => apply!(|x: f32| x.round()),
+                Activation::Round => apply!(|x: f32| x.round_ties_even()),
                 // Range-guarded fast arms: they fall back to libm for
                 // arguments too large to reduce in f32, so defaulting them on
                 // cannot trade accuracy for speed behind the caller's back.
@@ -2789,7 +2789,7 @@ pub(crate) fn region_activation_scalar(act: rlx_ir::op::Activation, x: f32) -> f
         A::Tan => x.tan(),
         A::Atan => x.atan(),
         A::Recip => 1.0 / x,
-        A::Round => x.round(),
+        A::Round => x.round_ties_even(),
         A::Floor => x.floor(),
         A::Ceil => x.ceil(),
         A::Sign => {
@@ -2994,7 +2994,7 @@ pub(crate) fn apply_activation_inplace(d: &mut [f32], act: rlx_ir::op::Activatio
         }
         Activation::Round => {
             for v in d.iter_mut() {
-                *v = v.round();
+                *v = v.round_ties_even();
             }
         }
         Activation::Sin => {

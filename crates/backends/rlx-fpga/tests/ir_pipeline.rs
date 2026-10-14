@@ -75,7 +75,7 @@ fn fused_top_sv_has_no_relu_kernel_or_instance() {
     );
     // And the requant epilogue clamps at OUT_ZP.
     assert!(
-        conv1.content.contains("(q_raw < OUT_ZP[7:0])"),
+        conv1.content.contains("(q_raw < $signed(OUT_ZP[7:0]))"),
         "conv1.sv should clamp q_raw at OUT_ZP for the fused relu"
     );
 }

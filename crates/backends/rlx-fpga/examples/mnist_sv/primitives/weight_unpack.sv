@@ -33,13 +33,13 @@ module weight_unpack #(
                     4'h6: w_out = 32'sd8;
                     4'h7: w_out = 32'sd12;
                     4'h8: w_out = 32'sd0;
-                    4'h9: w_out = 32'sd-1;
-                    4'hA: w_out = 32'sd-2;
-                    4'hB: w_out = 32'sd-3;
-                    4'hC: w_out = 32'sd-4;
-                    4'hD: w_out = 32'sd-6;
-                    4'hE: w_out = 32'sd-8;
-                    4'hF: w_out = 32'sd-12;
+                    4'h9: w_out = -32'sd1;
+                    4'hA: w_out = -32'sd2;
+                    4'hB: w_out = -32'sd3;
+                    4'hC: w_out = -32'sd4;
+                    4'hD: w_out = -32'sd6;
+                    4'hE: w_out = -32'sd8;
+                    4'hF: w_out = -32'sd12;
                     default: w_out = 32'sd0;
                 endcase
             end

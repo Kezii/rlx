@@ -70,6 +70,7 @@ pub mod repr_check;
 pub mod residual;
 pub mod rng;
 pub mod tensor_inspect;
+pub mod ternary;
 pub use nvfp4::{FP4_E2M1_LUT, NVFP4_GROUP_SIZE, fp4_e2m1_to_f32, fp8_e4m3_scale_to_f32};
 pub mod binding_manifest;
 pub mod component;

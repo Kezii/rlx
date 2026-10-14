@@ -48,7 +48,10 @@ export_graph(&graph, &FpgaExportConfig::default(), "hw/out")?;
 | `Generic` (default) | soft ports | `synth.sh` (Yosys generic), `EXPORT.md` |
 | `Ecp5` | same RTL | + `constraints.lpf` stub, ecp5 P&R script |
 | `Ice40` | same RTL | + `constraints.pcf` stub |
-| `Xilinx7` | same RTL | + `constraints.xdc` stub (experimental) |
+| `Xilinx7` (part only) | same RTL | + `constraints.xdc` stub; openXC7 synth |
+| `Xilinx7` + board (`xc7:arty-a7-35`, `basys3`, …) | + UART host-link `board_top` | real XDC, openXC7 `synth.sh` → `out.bit`, `program.sh`, `run_uart.py` |
+
+Ternary (BitNet b1.58) weights + QAT → FPGA: [docs/bitnet-fpga.md](../../../docs/bitnet-fpga.md).
 
 ## What's here
 

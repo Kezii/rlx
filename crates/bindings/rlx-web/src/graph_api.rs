@@ -231,6 +231,11 @@ impl WebModel {
     }
 
     /// Async sibling for WebGPU, where readback cannot block the event loop.
+    ///
+    /// The executor borrow spans the await, so it is taken with `try_borrow_mut`:
+    /// JS can call this twice without awaiting the first promise, and that has to
+    /// be a catchable error rather than a `BorrowMutError` panic.
+    #[allow(clippy::await_holding_refcell_ref)]
     #[cfg(target_arch = "wasm32")]
     pub async fn run_async(&self) -> Result<Vec<f32>, JsValue> {
         let feeds = self.feeds.borrow().clone();
@@ -238,9 +243,11 @@ impl WebModel {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_slice()))
             .collect();
-        let outs = self
+        let mut exec = self
             .exec
-            .borrow_mut()
+            .try_borrow_mut()
+            .map_err(|_| JsValue::from_str("a run is already in flight on this model"))?;
+        let outs = exec
             .run_async(&inputs)
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;

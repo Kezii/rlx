@@ -152,11 +152,11 @@ pub fn emit(layer: &Layer) -> LayerArtifacts {
                     v.line("S_IDLE   : if (start) next = S_READ;");
                     v.line("S_READ   : next = S_WAIT;");
                     v.line("S_WAIT   : next = S_UPDATE;");
-                    v.line("S_UPDATE : next = (kh_i == KH - 1 && kw_i == KW - 1) ? S_WRITE : S_READ;");
+                    v.line("S_UPDATE : if (kh_i == KH - 1 && kw_i == KW - 1) next = S_WRITE; else next = S_READ;");
                     v.line("S_WRITE  : begin");
                     v.block(|v| {
                         v.line("y_we = 1'b1;");
-                        v.line("next = (oh == H_OUT - 1 && ow == W_OUT - 1 && oc == C - 1) ? S_DONE : S_READ;");
+                        v.line("if (oh == H_OUT - 1 && ow == W_OUT - 1 && oc == C - 1) next = S_DONE; else next = S_READ;");
                     });
                     v.line("end");
                     v.line("S_DONE   : begin done = 1'b1; if (!start) next = S_IDLE; end");

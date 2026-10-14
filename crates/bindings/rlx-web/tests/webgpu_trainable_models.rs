@@ -20,7 +20,12 @@
 
 use rlx_runtime::{Device, Session, device_ext};
 
+// A source include, not a link against the lib: this test target compiles the
+// module afresh and runs its own dead-code pass over all of it, while the test
+// below uses only `build_train`/`all`/`slug`. Without the allow, every item the
+// test happens not to call is a hard error under `-D warnings`.
 #[path = "../src/vision/mod.rs"]
+#[allow(dead_code)]
 mod vision;
 
 #[test]

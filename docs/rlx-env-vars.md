@@ -13,8 +13,8 @@ semantics. Curated Public list: `just env-catalog`.
 | Internal | Bench / tooling |
 | Deprecated | Use replace_with |
 
-**Registered names:** 642  
-**Unregistered mentions (migration leftovers):** 137
+**Registered names:** 643  
+**Unregistered mentions (migration leftovers):** 136
 
 ## Groups
 
@@ -29,7 +29,7 @@ semantics. Curated Public list: `just env-catalog`.
 - [gpu](#gpu) — 4
 - [gpu-host](#gpu-host) — 1
 - [metal](#metal) — 191
-- [misc](#misc) — 97
+- [misc](#misc) — 98
 - [mlx](#mlx) — 20
 - [oneapi](#oneapi) — 5
 - [onnx](#onnx) — 5
@@ -530,9 +530,11 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_NATIVE_FK_REGIONS` | Bisect | Bool | Compile | Keep TransformRegion/BatchElementwiseRegion in MIR for native lowering |
 | `RLX_NEMO_TEST_FILE` | Bisect | Bool | Tooling | Path to a .nemo file for the NeMo tests |
 | `RLX_NO_FK_FUSION` | Bisect | Bool | Compile | Disable the FKL fusion passes |
+| `RLX_NO_INPLACE_KV` | Internal | Bool | Tooling | Concat the new decode KV row instead of appending it in place, every family (A/B lever) |
 | `RLX_NO_NATIVE_FK_REGIONS` | Bisect | Bool | Tooling | Force FK regions to decompose rather than lower natively |
 | `RLX_NO_SHARED_INPUT_MATMUL` | Bisect | Bool | Tooling | Opt out of sharing one matmul across consumers of the same input |
 | `RLX_NO_SHUFFLE` | Internal | Bool | Tooling | Do not shuffle the training set between epochs |
+| `RLX_OPENXC7_IMAGE` | Internal | String | Tooling | Container image for the opt-in openXC7 bitstream test (rlx-fpga) |
 | `RLX_ORT_CUDA_GRAPH` | Bisect | Bool | Tooling | Enable CUDA graph capture in the ONNX Runtime CUDA provider |
 | `RLX_PARITY_DEVICE` | Bisect | Bool | Tooling | Device the parity harness compares against: cuda (default) | rocm |
 | `RLX_PHASE_TIMING` | Bisect | Bool | Tooling | Print wall time for each compiler phase |
@@ -546,7 +548,6 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_QWEN3_F16_WEIGHTS` | Internal | Bool | Tooling | Store Qwen3 weights in f16 to halve decode weight bandwidth |
 | `RLX_QWEN3_FUSED_QKV` | Internal | Bool | Tooling | Fuse Q/K/V into one DequantMatMul (packed weights only) |
 | `RLX_QWEN3_GQA_NATIVE` | Internal | Bool | Tooling | Index K/V natively in the SDPA kernels instead of expanding for GQA |
-| `RLX_QWEN3_NO_INPLACE_KV` | Internal | Bool | Tooling | Concat the new KV row instead of appending it in place (A/B lever) |
 | `RLX_RANK` | Internal | String | Runtime | This process's rank in a distributed run |
 | `RLX_RIG_RUNTIME` | Bisect | Bool | Tooling | Where the device sweep runs: local (default) or a rig host |
 | `RLX_ROPE_DEBUG` | Bisect | Bool | Tooling | Print RoPE table strides and rotation indices |
@@ -899,7 +900,6 @@ Identifiers still appearing in the tree but not yet in the registry (docs, bench
 | `RLX_QNN_HTP_LIB` | `Justfile` |
 | `RLX_QWEN25_GGUF` | `rig.sh` |
 | `RLX_QWEN3_F16_LM_HEAD` | `CHANGELOG.md` |
-| `RLX_QWEN3_INPLACE_KV` | `crates/core/rlx-flow/src/blocks/qwen3_decode_layer.rs` |
 | `RLX_QWEN3_PARITY` | `CHANGELOG.md` |
 | `RLX_QWEN3_RETENTION` | `docs/README.md` |
 | `RLX_QWEN3_RETENTION_DEBUG` | `docs/kv-retention.md` |

@@ -11,10 +11,15 @@
 //! * [`ExportQuantMode::Fp4`] encodes weights on the F4E2M1 grid, packs
 //!   4-bit codes, and sets [`WeightEncoding::Fp4E2M1`] so codegen emits
 //!   an FP4→fixed LUT unpack (MAC still integer).
+//! * [`ExportQuantMode::Ternary`] ternarizes weights with the BitNet b1.58
+//!   absmean rule ([`rlx_ir::ternary`] — the same definition QAT trains
+//!   against), packs 2-bit codes, and lands on the multiplier-free
+//!   add/sub/skip MAC (`passes::ternary_fast_path`).
 
 use std::collections::HashMap;
 
 use rlx_ir::op::{Activation, BinaryOp, ReduceOp};
+use rlx_ir::ternary::{TernaryConfig, ternarize};
 use rlx_ir::{DType, Graph, NodeId, Op, ScaledFormat};
 
 use crate::export_config::GraphIoBind;
@@ -33,6 +38,9 @@ pub enum ExportQuantMode {
     Int4,
     /// OCP FP4 E2M1 weight codes, nibble-packed (`WeightEncoding::Fp4E2M1`).
     Fp4,
+    /// BitNet b1.58 `{-1, 0, 1}` weights, 2-bit packed (`weight_bits = 2`).
+    /// Scale scope comes from [`LegalizeOptions::ternary`]; match training.
+    Ternary,
 }
 
 impl ExportQuantMode {
@@ -41,8 +49,9 @@ impl ExportQuantMode {
             "int8" | "i8" | "q8" => Ok(Self::Int8),
             "int4" | "i4" | "q4" => Ok(Self::Int4),
             "fp4" | "f4" | "f4e2m1" => Ok(Self::Fp4),
+            "ternary" | "bitnet" | "b1.58" | "1.58" | "t2" => Ok(Self::Ternary),
             other => Err(format!(
-                "unknown ExportQuantMode {other:?}; expected int8 | int4 | fp4"
+                "unknown ExportQuantMode {other:?}; expected int8 | int4 | fp4 | ternary"
             )),
         }
     }
@@ -51,12 +60,13 @@ impl ExportQuantMode {
         match self {
             Self::Int8 => 8,
             Self::Int4 | Self::Fp4 => 4,
+            Self::Ternary => 2,
         }
     }
 
     pub fn encoding(self) -> WeightEncoding {
         match self {
-            Self::Int8 | Self::Int4 => WeightEncoding::SignedInt,
+            Self::Int8 | Self::Int4 | Self::Ternary => WeightEncoding::SignedInt,
             Self::Fp4 => WeightEncoding::Fp4E2M1,
         }
     }
@@ -74,6 +84,9 @@ pub struct LegalizeOptions {
     pub act_scales: HashMap<String, f32>,
     /// Append an Argmax / TopK(k=1) when the graph ends on logits.
     pub append_argmax: bool,
+    /// Ternary scale scope for [`ExportQuantMode::Ternary`]. Default is
+    /// BitNet per-tensor absmean; use what QAT used.
+    pub ternary: TernaryConfig,
 }
 
 impl LegalizeOptions {
@@ -166,7 +179,7 @@ fn unsupported_graph_message(g: &Graph) -> String {
         "rlx-fpga: graph is not export-ready. Expected either:\n\
            (1) INT8 ops: QConv2d / Relu / MaxPool / QMatMul / TopK(k=1), or\n\
            (2) f32 Conv/MatMul chain + LegalizeOptions weight tensors \
-             (ExportQuantMode::Int8 | Int4 | Fp4).\n\
+             (ExportQuantMode::Int8 | Int4 | Fp4 | Ternary).\n\
          Saw compute ops: [{}]. \
          Tip: train/quantize on CPU, then export; or call \
          legalize_fp32_to_model with weight bindings.",
@@ -271,7 +284,7 @@ pub fn legalize_fp32_to_model(
                     ));
                 }
                 let (packed, w_scales, encoding) =
-                    quantize_oihw(&w_f32, c_out, c_in, kh, kw, mode)?;
+                    quantize_oihw(&w_f32, c_out, c_in, kh, kw, mode, &opts.ternary)?;
                 let bias_f = node
                     .inputs
                     .get(2)
@@ -356,7 +369,8 @@ pub fn legalize_fp32_to_model(
                 let w_shape = g.shape(node.inputs[1]);
                 let in_f = w_shape.dim(0).unwrap_static();
                 let out_f = w_shape.dim(1).unwrap_static();
-                let (packed, w_scales, encoding) = quantize_iou(&w_f32, in_f, out_f, mode)?;
+                let (packed, w_scales, encoding) =
+                    quantize_iou(&w_f32, in_f, out_f, mode, &opts.ternary)?;
                 let out_scale = opts.act_scales.get(&w_name).copied().unwrap_or(1.0 / 127.0);
                 let bias_i32 = None; // may be filled by following Add
                 let requant: Vec<(i32, i32)> = w_scales
@@ -569,6 +583,7 @@ fn quantize_oihw(
     kh: usize,
     kw: usize,
     mode: ExportQuantMode,
+    ternary: &TernaryConfig,
 ) -> Result<(Vec<i8>, Vec<f32>, WeightEncoding), String> {
     let row = c_in * kh * kw;
     if w.len() != c_out * row {
@@ -599,6 +614,7 @@ fn quantize_oihw(
             Ok((pack(&logical, bits), scales, WeightEncoding::SignedInt))
         }
         ExportQuantMode::Fp4 => quantize_fp4_rows(w, c_out, row),
+        ExportQuantMode::Ternary => Ok(quantize_ternary_rows(w, c_out, row, ternary)),
     }
 }
 
@@ -607,6 +623,7 @@ fn quantize_iou(
     in_f: usize,
     out_f: usize,
     mode: ExportQuantMode,
+    ternary: &TernaryConfig,
 ) -> Result<(Vec<i8>, Vec<f32>, WeightEncoding), String> {
     if w.len() != in_f * out_f {
         return Err(format!(
@@ -641,7 +658,20 @@ fn quantize_iou(
             Ok((pack(&logical, bits), scales, WeightEncoding::SignedInt))
         }
         ExportQuantMode::Fp4 => quantize_fp4_rows(&oi, out_f, in_f),
+        ExportQuantMode::Ternary => Ok(quantize_ternary_rows(&oi, out_f, in_f, ternary)),
     }
+}
+
+/// BitNet absmean ternarize `[rows, row_len]` (rows = output channels) and
+/// pack 2-bit codes. `w_scale[row]` = `γ` (per-tensor `γ` is repeated).
+fn quantize_ternary_rows(
+    w: &[f32],
+    rows: usize,
+    row_len: usize,
+    cfg: &TernaryConfig,
+) -> (Vec<i8>, Vec<f32>, WeightEncoding) {
+    let t = ternarize(w, rows, row_len, cfg);
+    (pack(&t.codes, 2), t.row_scales(), WeightEncoding::SignedInt)
 }
 
 /// Per-row FP4 E2M1 encode. Codes packed as INT4 nibbles.
@@ -684,6 +714,10 @@ mod tests {
             ExportQuantMode::Int8
         );
         assert_eq!(ExportQuantMode::parse("fp4").unwrap(), ExportQuantMode::Fp4);
+        assert_eq!(
+            ExportQuantMode::parse("bitnet").unwrap(),
+            ExportQuantMode::Ternary
+        );
     }
 
     #[test]

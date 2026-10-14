@@ -20,8 +20,9 @@ fn consumed() -> PyErr {
 /// Args:
 ///   graph: pyrlx Graph (not consumed)
 ///   out_dir: output directory
-///   quant: "int8" | "int4" | "fp4" (default "int8")
-///   hw: "generic" | "ecp5" | "ice40" | "xilinx7:PART" (default "generic")
+///   quant: "int8" | "int4" | "fp4" | "ternary" (BitNet b1.58) (default "int8")
+///   hw: "generic" | "ecp5" | "ice40" | "xilinx7:PART" | "xc7:BOARD" (openXC7:
+///       arty-a7-35, arty-a7-100, basys3, nexys-a7-100) (default "generic")
 ///   in_iface: "memory" | "stream" | "both" (default "memory")
 ///   out_iface: "scalar" | "memory" | "stream" | "scalar+memory" | "both"
 ///   bind_in: optional Graph input name

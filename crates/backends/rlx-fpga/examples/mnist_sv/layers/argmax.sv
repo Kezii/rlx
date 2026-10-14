@@ -51,13 +51,13 @@ module argmax_kernel (
         x_addr = i;
         y_addr = 1'b0;
         y_we   = 1'b0;
-        y_din  = best_idx[7:0];
+        y_din  = 8'(best_idx);
         done   = 1'b0;
         unique case (state)
             S_IDLE   : if (start) next = S_READ;
             S_READ   : next = S_WAIT;
             S_WAIT   : next = S_UPDATE;
-            S_UPDATE : next = (i == LEN - 1) ? S_WRITE : S_READ;
+            S_UPDATE : if (i == LEN - 1) next = S_WRITE; else next = S_READ;
             S_WRITE  : begin y_we = 1'b1; next = S_DONE; end
             S_DONE   : begin done = 1'b1; if (!start) next = S_IDLE; end
         endcase

@@ -93,14 +93,15 @@ pub fn emit(layer: &Layer) -> LayerArtifacts {
                 v.line("x_addr = i;");
                 v.line("y_addr = 1'b0;");
                 v.line("y_we   = 1'b0;");
-                v.line("y_din  = best_idx[7:0];");
+                // Zero-extend: a `[7:0]` select of a narrower index reads X above its MSB.
+                v.line("y_din  = 8'(best_idx);");
                 v.line("done   = 1'b0;");
                 v.line("unique case (state)");
                 v.block(|v| {
                     v.line("S_IDLE   : if (start) next = S_READ;");
                     v.line("S_READ   : next = S_WAIT;");
                     v.line("S_WAIT   : next = S_UPDATE;");
-                    v.line("S_UPDATE : next = (i == LEN - 1) ? S_WRITE : S_READ;");
+                    v.line("S_UPDATE : if (i == LEN - 1) next = S_WRITE; else next = S_READ;");
                     v.line("S_WRITE  : begin y_we = 1'b1; next = S_DONE; end");
                     v.line("S_DONE   : begin done = 1'b1; if (!start) next = S_IDLE; end");
                 });

@@ -213,6 +213,13 @@ impl ClusterWorker {
     ///
     /// Returns `[loss, grad_0 .., grad_1 ..]` — the loss first, then the flat
     /// DDP bucket in parameter order, which is what the coordinator averages.
+    ///
+    /// The `RefMut` is held across the await, but `borrow_exec` acquires it with
+    /// `try_borrow_mut`, so a second in-flight call gets the "already in flight"
+    /// error rather than the `BorrowMutError` panic the lint exists to catch.
+    /// Taking the graph out of the cell instead would strand it there on an error
+    /// path; a guard releases on drop.
+    #[allow(clippy::await_holding_refcell_ref)]
     #[cfg(target_arch = "wasm32")]
     pub async fn grads(&self, start: u32) -> Result<Vec<f32>, JsValue> {
         let (x, labels) = self.shard(start);

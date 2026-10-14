@@ -22,12 +22,11 @@
 //! optimizer takes care of that in `passes::parallelism`.
 //!
 //! Restrictions in this first cut:
-//! * `pad_h == pad_w == 0` (matches the scalar kernel).
 //! * `weight_bits ∈ {2, 4, 8}` — handled by per-lane `weight_unpack`
 //!   (or per-lane crumb-mux when `ternary_fast_path` is on).
 
 use super::{Artifact, LayerArtifacts};
-use crate::codegen::conv2d::emit_byte_addr_lane;
+use crate::codegen::conv2d::{emit_byte_addr_lane, emit_in_idx, emit_pad_decls};
 use crate::codegen::relu::bits_for;
 use crate::model::Layer;
 use crate::pack::{
@@ -109,8 +108,6 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
         ),
         _ => unreachable!("conv2d_parallel::emit on non-Conv2d layer"),
     };
-    assert_eq!(pad_h, 0);
-    assert_eq!(pad_w, 0);
     assert_eq!(
         c_out % p,
         0,
@@ -263,6 +260,7 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
             v.line(&format!("localparam int H_IN={h_in}, W_IN={w_in}, C_IN={c_in};"));
             v.line(&format!("localparam int H_OUT={h_out}, W_OUT={w_out}, C_OUT={c_out};"));
             v.line(&format!("localparam int KH={kh}, KW={kw}, SH={stride_h}, SW={stride_w};"));
+            v.line(&format!("localparam int PAD_H={pad_h}, PAD_W={pad_w};"));
             v.line(&format!("localparam int X_ZP={x_zp}, W_ZP={w_zp}, OUT_ZP={out_zp};"));
             v.line(&format!("localparam int W_BITS={weight_bits};"));
             v.line(&format!("localparam int P={p};"));
@@ -283,6 +281,10 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
 
             // Lane index for sub-byte weight unpacking (shared across lanes — same lane_q value).
             v.line("logic [1:0] w_lane_q;");
+            // The weight ROM reads one cycle late; register the lane with it so
+            // the crumb/nibble select matches the byte actually on `w_byte`.
+            v.line("logic [1:0] w_lane;");
+            v.line("always_ff @(posedge clk) w_lane_q <= w_lane;");
             if hints.ternary_fast_path && p_ic > 1 {
                 v.comment("Per-(oc, ic) crumb extraction — all 4 crumbs from each oc-lane's byte");
                 v.line("logic [1:0] w_crumb [0:P-1][0:P_IC-1];");
@@ -350,6 +352,15 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
             }
             v.blank();
 
+            // ── Counters ──
+            v.line("logic signed [31:0] acc [0:P-1];");
+            v.line(&format!("logic [{}:0] oh, ow;",
+                            bits_for(h_out.max(w_out)) - 1));
+            v.line(&format!("logic [{}:0] oc_block;",
+                            oc_block_bits.saturating_sub(1)));
+            v.line(&format!("logic [{}:0] kh_i, kw_i;", bits_for(kh.max(kw)) - 1));
+            v.line(&format!("logic [{}:0] ic;", bits_for(c_in) - 1));
+            v.blank();
             // ── Requant table sources ──
             v.comment("─── P requant ROMs (or shared localparam) ───");
             if let Some((m0_q31, shift_v)) = hints.shared_requant {
@@ -422,30 +433,24 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
             }
             if hints.fuses_relu {
                 v.comment("fuses_relu: clamp at OUT_ZP (= relu zero_point)");
-                v.line("assign q_out = (q_raw < OUT_ZP[7:0]) ? OUT_ZP[7:0] : q_raw;");
+                // A part-select is unsigned: without $signed the compare is unsigned
+                // and negative q_raw never clamps.
+                v.line("assign q_out = (q_raw < $signed(OUT_ZP[7:0])) ? $signed(OUT_ZP[7:0]) : q_raw;");
             } else {
                 v.line("assign q_out = q_raw;");
             }
             v.blank();
 
-            // ── Counters ──
-            v.line("logic signed [31:0] acc [0:P-1];");
-            v.line(&format!("logic [{}:0] oh, ow;",
-                            bits_for(h_out.max(w_out)) - 1));
-            v.line(&format!("logic [{}:0] oc_block;",
-                            oc_block_bits.saturating_sub(1)));
-            v.line(&format!("logic [{}:0] kh_i, kw_i;", bits_for(kh.max(kw)) - 1));
-            v.line(&format!("logic [{}:0] ic;", bits_for(c_in) - 1));
-            v.blank();
 
             v.comment("Address derivation");
             v.line(&format!("logic [{}:0] in_idx;", in_addr_bits - 1));
             v.line(&format!("logic [{}:0] w_idx_logical;", lane_log_bits - 1));
+            emit_pad_decls(v, pad_h + pad_w > 0);
             v.always_comb(|v| {
-                v.line("in_idx = ((oh*SH + kh_i) * W_IN + (ow*SW + kw_i)) * C_IN + ic;");
+                emit_in_idx(v, pad_h + pad_w > 0);
                 v.comment("Per-lane logical index (same for every lane — lane index lives outside)");
                 v.line("w_idx_logical = (oc_block * KH + kh_i) * KW * C_IN + kw_i * C_IN + ic;");
-                emit_byte_addr_lane(v, "w_addr", "w_lane_q", "w_idx_logical", lane_log_bits, log2_per_byte);
+                emit_byte_addr_lane(v, "w_addr", "w_lane", "w_idx_logical", lane_log_bits, log2_per_byte);
             });
             v.blank();
 
@@ -567,7 +572,7 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
                     v.line("end");
                     v.line("if (state == S_PIPE) begin");
                     v.block(|v| {
-                        v.line("if (prev_valid) for (int i = 0; i < P; i = i + 1)");
+                        v.line("if (prev_valid && !in_pad_q) for (int i = 0; i < P; i = i + 1)");
                         v.line("    acc[i] <= acc[i] + mac_delta[i];");
                         v.line("if (!done_issuing) begin");
                         v.block(|v| {
@@ -639,7 +644,7 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
                     v.line("S_LOAD_BIAS : next = S_BIAS_WAIT;");
                     v.line("S_BIAS_WAIT : next = S_INIT_ACC;");
                     v.line("S_INIT_ACC  : next = S_PIPE;");
-                    v.line("S_PIPE      : next = (done_issuing && prev_valid) ? S_WRITE : S_PIPE;");
+                    v.line("S_PIPE      : if (done_issuing && prev_valid) next = S_WRITE; else next = S_PIPE;");
                     v.line("S_WRITE     : begin");
                     v.block(|v| {
                         v.line("y_we = 1'b1;");

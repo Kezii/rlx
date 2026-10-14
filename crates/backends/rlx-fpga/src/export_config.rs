@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use crate::from_graph::FromGraphOptions;
 use crate::legalize::{ExportQuantMode, LegalizeOptions};
 use crate::tune::{OptTarget, Tune};
+use crate::xc7::Xc7Board;
 
 /// FPGA / ASIC synthesis family for optional constraint + script emit.
 ///
@@ -36,12 +37,15 @@ pub enum HwTarget {
     },
     /// Lattice iCE40 via `yosys synth_ice40` → `nextpnr-ice40` → `icepack`.
     Ice40 { device: String, package: String },
-    /// Xilinx 7-series via open XC7 flow (`synth_xilinx` / nextpnr-xilinx).
-    /// Experimental — scripts are emitted; P&R success depends on the
-    /// installed open toolchain.
+    /// Xilinx 7-series via the open [openXC7](https://github.com/openXC7)
+    /// flow (`synth_xilinx` → nextpnr-xilinx → fasm2frames → xc7frames2bit).
+    /// With a `board` preset the export adds a UART host-link `board_top`,
+    /// real pin constraints and an `openFPGALoader` `program.sh`; without
+    /// one, only the soft `top` is synthesized.
     Xilinx7 {
         /// Part name, e.g. `"xc7a35tcsg324-1"`.
         part: String,
+        board: Option<Xc7Board>,
     },
 }
 
@@ -67,8 +71,25 @@ impl HwTarget {
         }
     }
 
+    /// openXC7 board preset (part + pins + UART host link).
+    pub fn xc7_board(board: Xc7Board) -> Self {
+        Self::Xilinx7 {
+            part: board.part().into(),
+            board: Some(board),
+        }
+    }
+
+    /// The openXC7 board preset, when one is set.
+    pub fn xc7(&self) -> Option<Xc7Board> {
+        match self {
+            Self::Xilinx7 { board, .. } => *board,
+            _ => None,
+        }
+    }
+
     /// Parse CLI / config strings: `generic`, `ecp5`, `ecp5:25k:CABGA381`,
-    /// `ice40`, `ice40:up5k:sg48`, `xilinx7:xc7a35tcsg324-1`.
+    /// `ice40`, `ice40:up5k:sg48`, `xilinx7:xc7a35tcsg324-1`, or an openXC7
+    /// board `xc7:arty-a7-35` / `xc7:basys3` / `xc7:nexys-a7-100`.
     pub fn parse(s: &str) -> Result<Self, String> {
         let s = s.trim();
         let lower = s.to_ascii_lowercase();
@@ -91,17 +112,22 @@ impl HwTarget {
                         Ok(Self::Ice40 { device, package })
                     }
                     "xilinx7" | "xc7" => {
-                        let part = parts
-                            .next()
-                            .ok_or_else(|| {
-                                "xilinx7 requires a part, e.g. xilinx7:xc7a35tcsg324-1".to_string()
-                            })?
-                            .to_string();
-                        Ok(Self::Xilinx7 { part })
+                        let arg = parts.next().ok_or_else(|| {
+                            "xilinx7 requires a board or part, e.g. xc7:arty-a7-35 or \
+                             xilinx7:xc7a35tcsg324-1"
+                                .to_string()
+                        })?;
+                        Ok(match Xc7Board::parse(arg) {
+                            Some(board) => Self::xc7_board(board),
+                            None => Self::Xilinx7 {
+                                part: arg.to_string(),
+                                board: None,
+                            },
+                        })
                     }
                     _ => Err(format!(
                         "unknown HwTarget {s:?}; expected generic | ecp5[:device:pkg] | \
-                         ice40[:device:pkg] | xilinx7:<part>"
+                         ice40[:device:pkg] | xc7:<board|part>"
                     )),
                 }
             }
@@ -114,7 +140,8 @@ impl HwTarget {
             Self::Generic => "generic".into(),
             Self::Ecp5 { device, package } => format!("ecp5_{device}_{package}"),
             Self::Ice40 { device, package } => format!("ice40_{device}_{package}"),
-            Self::Xilinx7 { part } => format!("xilinx7_{part}"),
+            Self::Xilinx7 { board: Some(b), .. } => format!("xc7_{}", b.name()),
+            Self::Xilinx7 { part, .. } => format!("xilinx7_{part}"),
         }
     }
 
@@ -130,7 +157,11 @@ impl fmt::Display for HwTarget {
             Self::Generic => write!(f, "generic (target-agnostic)"),
             Self::Ecp5 { device, package } => write!(f, "ecp5 {device} {package}"),
             Self::Ice40 { device, package } => write!(f, "ice40 {device} {package}"),
-            Self::Xilinx7 { part } => write!(f, "xilinx7 {part}"),
+            Self::Xilinx7 {
+                part,
+                board: Some(b),
+            } => write!(f, "xilinx7 {part} ({b}, openXC7)"),
+            Self::Xilinx7 { part, .. } => write!(f, "xilinx7 {part} (openXC7)"),
         }
     }
 }

@@ -30,7 +30,13 @@ pub fn collect_board_shell(model: &Model, hw: &HwTarget, io: &IoConfig) -> Optio
             rel_path: "board_top.sv".into(),
             content: emit_ice40_shell(&model.name, io),
         }),
-        HwTarget::Xilinx7 { .. } => Some(Artifact {
+        HwTarget::Xilinx7 {
+            board: Some(board), ..
+        } => Some(Artifact {
+            rel_path: "board_top.sv".into(),
+            content: crate::codegen::uart::emit_uart_board_top(model, io, *board),
+        }),
+        HwTarget::Xilinx7 { board: None, .. } => Some(Artifact {
             rel_path: "board_top.sv".into(),
             content: emit_xilinx7_shell(&model.name, io),
         }),

@@ -42,6 +42,7 @@ pub mod sideband;
 pub mod tune;
 pub mod verilog;
 pub mod weights;
+pub mod xc7;
 
 pub use codegen::{
     Artifact, collect_artifacts, collect_artifacts_opt, emit_model, emit_model_tuned,

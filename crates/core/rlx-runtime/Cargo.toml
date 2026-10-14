@@ -329,6 +329,10 @@ required-features = ["cpu"]
 name = "int8_qat_train"
 required-features = ["cpu"]
 
+[[example]]
+name = "bitnet_ternary_fpga"
+required-features = ["cpu", "fpga"]
+
 [package.metadata.docs.rs]
 features     = ["cpu", "gpu"]
 rustdoc-args = ["--cfg", "docsrs"]

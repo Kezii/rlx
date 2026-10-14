@@ -380,6 +380,12 @@ fn rope_inputs() -> (Vec<f32>, Vec<f32>, Vec<f32>) {
 /// would compute. So it pins the `n_rot/2` mistake and is blind to the
 /// `head_dim/2` one. This fixture is blind to the opposite. Both are needed;
 /// each backward kernel has, at different times, had each of the two.
+#[cfg(any(
+    feature = "gpu",
+    feature = "cuda",
+    feature = "rocm",
+    all(target_os = "macos", feature = "metal")
+))]
 fn rope_inputs_packed() -> (Vec<f32>, Vec<f32>, Vec<f32>) {
     let (b, s, hd, n_rot) = (1usize, 3usize, 8usize, 4usize);
     let tab = n_rot / 2;
@@ -389,6 +395,12 @@ fn rope_inputs_packed() -> (Vec<f32>, Vec<f32>, Vec<f32>) {
     (dy, cos, sin)
 }
 
+#[cfg(any(
+    feature = "gpu",
+    feature = "cuda",
+    feature = "rocm",
+    all(target_os = "macos", feature = "metal")
+))]
 fn build_rope_bwd_graph_packed() -> Graph {
     let f = DType::F32;
     let (b, s, hd, n_rot) = (1usize, 3usize, 8usize, 4usize);

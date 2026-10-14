@@ -294,6 +294,11 @@ const CACHED_BLAS_MIN_WEIGHT_ELEMS: usize = 32 * 32;
 /// Route Q4_K decode GEMVs through the exact f32-activation kernel instead of
 /// the Q8_K one (`RLX_Q4K_EXACT_GEMV=1`). Costs ALU, keeps decode numerics
 /// independent of whether the f32 dequant cache happened to fit.
+///
+/// Its only caller is the rayon arm of `gguf_matmul_bt_m1_parallel`, itself
+/// `cfg(not(wasm32))` — so gate it the same way as `dot256` above rather than
+/// let it warn as dead code on the wasm build.
+#[cfg(not(target_arch = "wasm32"))]
 fn q4k_exact_gemv() -> bool {
     rlx_ir::env::flag("RLX_Q4K_EXACT_GEMV")
 }

@@ -6,7 +6,7 @@
 //!
 //! ```text
 //!   rlx-fpga-emit [--target latency|size|energy|precision|bandwidth]
-//!                 [--hw generic|ecp5|ice40|xilinx7:PART]
+//!                 [--hw generic|ecp5|ice40|xc7:BOARD|xilinx7:PART]
 //!                 [--out DIR]
 //! ```
 //!
@@ -157,7 +157,8 @@ fn main() -> ExitCode {
                        [--bind-in NAME] [--bind-out a,b]\n\
                        [--sideband name[:bits[:signed]]] [--bind-sideband a,b]\n\
                        T  = latency|size|energy|precision|bandwidth\n\
-                       HW = generic|ecp5|ecp5:DEV:PKG|ice40|ice40:DEV:PKG|xilinx7:PART"
+                       HW = generic|ecp5|ecp5:DEV:PKG|ice40|ice40:DEV:PKG|xilinx7:PART|\n\
+                            xc7:arty-a7-35|xc7:arty-a7-100|xc7:basys3|xc7:nexys-a7-100 (openXC7)"
                 );
                 return ExitCode::SUCCESS;
             }

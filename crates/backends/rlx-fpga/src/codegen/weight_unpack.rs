@@ -102,7 +102,9 @@ fn fp4_e2m1_lut_lines() -> Vec<String> {
             } else {
                 0
             };
-            format!("4'h{code:X}: w_out = 32'sd{q};")
+            // The sign goes outside the sized literal: `32'sd-1` is not Verilog.
+            let sign = if q < 0 { "-" } else { "" };
+            format!("4'h{code:X}: w_out = {sign}32'sd{};", q.unsigned_abs())
         })
         .collect()
 }

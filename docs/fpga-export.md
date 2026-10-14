@@ -87,6 +87,7 @@ CLI: `--in-iface`, `--out-iface`, `--bind-in`, `--bind-out`, `--sideband name[:b
 | `Int8` | signed INT8 | default |
 | `Int4` | nibble-packed signed INT4 | |
 | `Fp4` | F4E2M1 codes, nibble-packed | MAC via FP4→fixed LUT (`ENCODING=1`) |
+| `Ternary` | BitNet b1.58 `{-1,0,1}`, 2-bit packed | absmean (`rlx_ir::ternary`); multiplier-free add/sub/skip MAC on every tune. Train with QAT first — see [bitnet-fpga.md](bitnet-fpga.md) |
 
 f32 `Conv`/`MatMul` graphs need `LegalizeOptions.weights_f32` (or baked
 `Op::Constant` weights). `Op::ScaledMatMul` is rejected with guidance to
@@ -95,7 +96,49 @@ use `ExportQuantMode::Fp4` on an f32 MatMul instead.
 ### Board shell
 
 `HwTarget::Generic` (default): soft-port `top.sv` only — preferred for ASIC.  
-`Ecp5` / `Ice40` / `Xilinx7`: same RTL + `board_top.sv` pin wrapper + stub constraints.
+`Ecp5` / `Ice40` / `Xilinx7 { board: None }`: same RTL + `board_top.sv` pin wrapper + stub constraints.
+
+### openXC7 boards (`HwTarget::xc7_board`, `--hw xc7:<board>`)
+
+Xilinx 7-series through the open [openXC7](https://github.com/openXC7) flow.
+Presets: `arty-a7-35`, `arty-a7-100`, `basys3`, `nexys-a7-100`. The export adds:
+
+| File | Role |
+|------|------|
+| `board_top.sv` | power-on reset + **UART host link** (115200 8N1) around soft `top` |
+| `constraints.xdc` | real clock / reset / UART / LED pins |
+| `synth.sh` | `yosys synth_xilinx -family xc7` → `nextpnr-xilinx` → `fasm2frames` → `xc7frames2bit` → `out.bit` (chipdb built once, cached in `~/.cache/rlx-fpga/chipdb`) |
+| `program.sh` | `openFPGALoader -b <board> out.bit` (`FLASH=1` writes SPI flash) |
+| `run_uart.py` | host side (pyserial): sends `.mem` stimulus, prints `pred` / logits |
+
+Protocol: host sends `0xA5` + `input_len` i8 bytes; the board replies with
+`pred` (pred port) and then every output byte (memory readout,
+`OutputIface::ScalarAndMemory`). Toolchain paths: `OPENXC7_PREFIX` (default
+the snap, `/snap/openxc7/current/opt`), `PRJXRAY_DB_DIR`,
+`NEXTPNR_XILINX_PYTHON_DIR`, `CHIPDB_DIR`; extra flags via `YOSYS_SYNTH_OPTS`
+/ `NEXTPNR_OPTS`.
+
+No local install? Run the generated script in the openXC7 container:
+
+```sh
+docker run --rm --platform linux/amd64 -v "$PWD":/work -v ~/.cache/rlx-fpga/chipdb:/chipdb \
+    -e CHIPDB_DIR=/chipdb -w /work regymm/openxc7 bash ./synth.sh
+```
+
+`tests/openxc7_docker.rs` (`--ignored`) does exactly this and requires
+`out.bit` plus post-route fmax ≥ the board clock. Synthesis uses
+`-nolutram`: nextpnr-xilinx cannot place distributed RAM.
+
+`tests/xc7_uart.rs` drives this link in simulation — RTL, and the
+`synth_xilinx` netlist against Yosys's Xilinx cell models — and compares
+the replies with `rlx_fpga::reference`.
+
+### RTL simulation parity
+
+`tests/sim_parity.rs` simulates the emitted RTL under Icarus Verilog and
+checks every logit and the argmax against `rlx_fpga::reference`: dense and
+conv models × 2/4/8-bit weights × every tune preset, plus TinyConv-MNIST.
+Skipped when `iverilog` is not installed.
 
 ### Output kinds
 

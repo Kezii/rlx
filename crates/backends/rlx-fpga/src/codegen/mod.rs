@@ -38,6 +38,7 @@ pub mod relu;
 pub mod requant;
 pub mod synth;
 pub mod top;
+pub mod uart;
 pub mod weight_unpack;
 
 /// One generated artifact (a `.sv` source or a `.mem` data file). All
@@ -110,6 +111,9 @@ pub fn emit_optimized_with_config(
     cfg: &FpgaExportConfig,
     out_dir: &Path,
 ) -> io::Result<()> {
+    if cfg.emit_board_shell && cfg.hw_target.xc7().is_some() {
+        uart::uart_supported(&cfg.io).map_err(io::Error::other)?;
+    }
     fs::create_dir_all(out_dir.join("primitives"))?;
     fs::create_dir_all(out_dir.join("layers"))?;
     fs::create_dir_all(out_dir.join("weights"))?;
@@ -127,7 +131,7 @@ pub fn emit_optimized_with_config(
             fs::create_dir_all(parent)?;
         }
         fs::write(&path, &a.content)?;
-        if a.rel_path == "synth.sh" {
+        if a.rel_path.ends_with(".sh") || a.rel_path.ends_with(".py") {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;

@@ -23,7 +23,8 @@ pub fn emit_block_rom() -> String {
         &[
             "parameter int    WIDTH     = 8".into(),
             "parameter int    DEPTH     = 256".into(),
-            "parameter string INIT_FILE = \"\"".into(),
+            // Untyped: Yosys has no `string` parameter type.
+            "parameter        INIT_FILE = \"\"".into(),
         ],
         &[
             "input  logic                       clk".into(),

@@ -507,7 +507,7 @@ fn emit_controller(v: &mut V, n_layers: usize, names: &crate::export_config::Por
             });
             v.line("end");
             v.line(&format!(
-                "C_STEP : cnext = (stage == {}) ? C_DONE : C_RUN;",
+                "C_STEP : if (stage == {}) cnext = C_DONE; else cnext = C_RUN;",
                 n_layers.saturating_sub(1)
             ));
             v.line(&format!("C_DONE : if (!{}) cnext = C_IDLE;", names.start));

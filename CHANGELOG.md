@@ -25,6 +25,52 @@ release, rename `[Unreleased]` to the new version and add a fresh empty
 
 ### Added
 
+- **Ternary (BitNet b1.58) weights, including quantization-aware training.**
+  `rlx_ir::ternary` is the one definition training and export share: absmean
+  weights (`γ = mean|W|`, codes `clamp(round(W/γ), −1, 1)`, per tensor by
+  default, `TernaryScale::PerChannel` optional) and int8 per-token absmax
+  activations. `rlx_compile::inject_bitnet_qat` rewrites every `MatMul` / `Conv`
+  whose weight traces to a leaf into `w + stop_gradient(ternary(w) − w)` (and
+  the activation likewise) — the BitNet straight-through estimator, built from
+  existing primitives, so it trains on any backend; `keep_full_precision`
+  leaves embeddings / LM heads in f32. `rlx-runtime/tests/bitnet_qat.rs` checks
+  the CPU forward loss and `dW` against the host definition. The
+  `bitnet_ternary_fpga` example shows why QAT matters: ternary PTQ alone drops
+  test accuracy from 81.8 % (f32) to 55.9 %, QAT recovers 82.2 %.
+
+- **`ExportQuantMode::Ternary` for FPGA export** (`quant="ternary"` / `"bitnet"`).
+  f32 `Conv` / `MatMul` weights are ternarized with the same `TernaryConfig`
+  (`LegalizeOptions::ternary`) and packed 2 bits per weight, and the export
+  always takes the multiplier-free add/sub/skip MAC — on every tune preset, since
+  it is exact. Walkthrough: [`docs/bitnet-fpga.md`](docs/bitnet-fpga.md).
+
+- **openXC7 boards: Xilinx 7-series bitstreams and a UART host link.**
+  `HwTarget::xc7_board` / `--hw xc7:<board>` (Arty A7-35/100, Basys 3,
+  Nexys A7-100) emits a `board_top` with power-on reset and a 115200-baud host
+  link (`0xA5` + input bytes in, `pred` and optionally every output byte back),
+  the board's real pin constraints, a `synth.sh` that runs the full open flow —
+  `synth_xilinx` → `nextpnr-xilinx` → `fasm2frames` → `xc7frames2bit` → `out.bit`,
+  with the part's chipdb built once and cached — plus `program.sh`
+  (`openFPGALoader`) and `run_uart.py`. The script finds the toolchain in the
+  snap, a source build, or the `regymm/openxc7` container. Built in that
+  container for Arty A7-35: the example MLP routes at 164.9 MHz and a padded
+  ternary CNN at 110.4 MHz against the 100 MHz board clock
+  (`tests/openxc7_docker.rs`, `--ignored`). Not yet run on a board.
+
+- **Zero padding in FPGA conv layers.** Both conv kernels (scalar and
+  output-channel-parallel) accept any `pad_h` / `pad_w` and stride; out-of-bounds
+  taps skip the accumulate, as the reference does. Previously any padding
+  panicked in codegen, so most real CNNs could not export.
+
+- **The emitted RTL is now simulated, not just inspected.**
+  `rlx-fpga/tests/sim_parity.rs` runs the SystemVerilog under Icarus Verilog and
+  compares every logit and the argmax with `rlx_fpga::reference`: dense and
+  padded/strided conv models × 2/4/8-bit weights × every tune preset, plus
+  TinyConv-MNIST. `tests/xc7_uart.rs` drives the UART link bit by bit, on the RTL
+  and on the `synth_xilinx` netlist against Yosys's Xilinx cell models. Both
+  skip when the tools are absent. Every RTL bug under **Fixed** was found by
+  these on their first run.
+
 - **`just check-rustdoc` — a rustdoc gate, wired into `just ci`.** rustdoc was in
   no repo gate, and `cargo doc --workspace` is the wrong instrument for one: it
   resolves the whole workspace under a single unified (default) feature set, so
@@ -36,6 +82,25 @@ release, rename `[Unreleased]` to the new version and add a fresh empty
   `publish = false` crates, which docs.rs never builds.
 
 ### Changed
+
+- **One decode KV-append decision for every model family.**
+  `rlx_flow::blocks::kv_cache` holds it: `append_kv_row` emits the O(1)
+  in-place `Op::KvAppend` when the flow bound its inputs with
+  `bind_decode_inputs_with_capacity` and the cache layout can alias (nothing but
+  size-1 dims before the sequence axis), and `concat` otherwise;
+  `kv_spare_rows` shapes the cache from the same predicate so the declared shape
+  and the emitted op cannot disagree. The Llama and Gemma decode layers can now
+  take the in-place path too (previously only Qwen3) — once their flow binds
+  with capacity; no in-tree flow does yet, so they still `concat`. The opt-out is
+  `RLX_NO_INPLACE_KV` for all families; the old `RLX_QWEN3_NO_INPLACE_KV` is no
+  longer read. A Qwen3 cache without a spare row now falls back to `concat`
+  instead of returning an error.
+
+- **FPGA export API additions that break exhaustive matches / struct
+  literals:** `HwTarget::Xilinx7` gained `board: Option<Xc7Board>`,
+  `ExportQuantMode` gained `Ternary`, and `LegalizeOptions` gained
+  `ternary: TernaryConfig` (construct with `..Default::default()`). The
+  `xilinx7:<part>` string form still parses, with no board.
 
 - **`rlx-js` takes `quickrs-core` from crates.io instead of a sibling checkout.**
   The engine is published as of 0.16.2, so building this workspace no longer
@@ -58,6 +123,47 @@ release, rename `[Unreleased]` to the new version and add a fresh empty
   because a claim tested too narrowly is worse than no claim.
 
 ### Fixed
+
+- **2- and 4-bit FPGA exports computed wrong results.** The weight-byte lane
+  select was combinational while the weight ROM reads a cycle late, so each MAC
+  took the crumb/nibble for the *next* index out of the *previous* byte. INT8
+  ignores the lane, which is why nothing caught it; every INT4 and ternary export
+  was affected.
+
+- **Fused conv+ReLU never clamped in hardware.** The clamp compared
+  `q_raw < OUT_ZP[7:0]`; a part-select is unsigned, so negative values passed
+  through. The checked-in TinyConv-MNIST demo RTL (`examples/mnist_sv/`) had it
+  and is regenerated.
+
+- **Emitted SystemVerilog that strict tools reject.** Signals were used before
+  their declaration (dense and conv `acc` / counters), the FP4 decode table wrote
+  `32'sd-1`, `block_rom` declared `parameter string` (Yosys has no `string`
+  parameter type, so no Yosys flow could read the RTL), and argmax read
+  `best_idx[7:0]` past its MSB (X in simulation). State transitions written as
+  enum `? :` are now `if`/`else`, which every simulator accepts.
+
+- **nextpnr-xilinx could not place exported designs.** Yosys mapped small
+  buffers to distributed RAM (`RAM64X1S`), which nextpnr-xilinx cannot pack; the
+  openXC7 script synthesizes with `-nolutram`.
+
+- **CPU `Round` rounded halves away from zero on two of its three paths.** The IR
+  defines half-to-even (ONNX `Round`, `rlxsl`, the third CPU path); `x.round()`
+  is now `round_ties_even()` everywhere, so `Round`-based quantizers give the
+  same codes on every path.
+
+- **A second in-flight WebGPU run panicked instead of erroring.**
+  `WebModel::run_async` and `ClusterWorker::grads` hold the executor borrow
+  across an await; calling either again before the first promise settled hit a
+  `BorrowMutError` panic. Both take the borrow with `try_borrow_mut`, so JS gets a
+  catchable "already in flight" error.
+
+- **`-D warnings` failures on wasm and in `rlx-web` tests.** `q4k_exact_gemv` is
+  only called from a `cfg(not(wasm32))` path and warned as dead code on the wasm
+  build; it is gated the same way now. `webgpu_trainable_models.rs` source-includes
+  the vision module and now allows the dead code it does not call. In
+  `autodiff_training_backward_gpu.rs` the packed-table RoPE fixtures are gated to
+  the GPU features of the tests that use them, so `cargo clippy --all-targets`
+  without a GPU feature no longer fails on them.
 
 - **The env-var registry had drifted by 15 reads.** `RLX_BLAS_ALIAS_CHECK`, seven
   Metal knobs (small-m MPS routing and its trace, the share-driven weight split

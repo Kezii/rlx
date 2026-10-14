@@ -31,6 +31,8 @@ module conv2_kernel (
     u_w_rom (.clk(clk), .addr(w_addr), .dout(w_byte));
 
     logic [1:0] w_lane_q;
+    logic [1:0] w_lane;
+    always_ff @(posedge clk) w_lane_q <= w_lane;
     // Combinational weight unpack
     logic signed [31:0] w_val;
     weight_unpack #(.BITS(W_BITS), .ENCODING(0)) u_w_unpack (
@@ -45,6 +47,12 @@ module conv2_kernel (
     block_rom #(.WIDTH(32), .DEPTH(16),
       .INIT_FILE("weights/conv2_b.mem"))
     u_b_rom (.clk(clk), .addr(b_addr), .dout(b_dout));
+
+    // Counters
+    logic [3:0] oh, ow, oc;
+    logic [1:0] kh_i, kw_i;
+    logic [2:0] ic;
+    logic signed [31:0] acc;
 
     // Requant ROMs (per-OC)
     logic [3:0] r_addr;
@@ -69,13 +77,7 @@ module conv2_kernel (
         .q(q_raw)
     );
     // fuses_relu: clamp at OUT_ZP (= relu zero_point)
-    assign q_out = (q_raw < OUT_ZP[7:0]) ? OUT_ZP[7:0] : q_raw;
-
-    // Counters
-    logic [3:0] oh, ow, oc;
-    logic [1:0] kh_i, kw_i;
-    logic [2:0] ic;
-    logic signed [31:0] acc;
+    assign q_out = (q_raw < $signed(OUT_ZP[7:0])) ? $signed(OUT_ZP[7:0]) : q_raw;
 
     // Address derivation
     logic [10:0] in_idx;
@@ -86,7 +88,7 @@ module conv2_kernel (
         out_idx       = (oh * W_OUT + ow) * C_OUT + oc;
         w_idx_logical = ((oc * KH + kh_i) * KW + kw_i) * C_IN + ic;
         w_addr = w_idx_logical;
-        w_lane_q = 2'd0;
+        w_lane = 2'd0;
     end
 
     // Per-cycle MAC delta
@@ -171,11 +173,12 @@ module conv2_kernel (
             // S_PIPE exits when the last MAC has been accumulated:
             //   done_issuing means all reads have been issued; prev_valid means
             //   the data from the very last read is being consumed THIS cycle.
-            S_PIPE      : next = (done_issuing && prev_valid) ? S_WRITE : S_PIPE;
+            S_PIPE      : if (done_issuing && prev_valid) next = S_WRITE; else next = S_PIPE;
             S_WRITE     : begin
                 y_we = 1'b1;
-                next = (oh == H_OUT - 1 && ow == W_OUT - 1 && oc == C_OUT - 1)
-                       ? S_DONE : S_LOAD_BIAS;
+                if (oh == H_OUT - 1 && ow == W_OUT - 1 && oc == C_OUT - 1)
+                    next = S_DONE;
+                else next = S_LOAD_BIAS;
             end
             S_DONE      : begin done = 1'b1; if (!start) next = S_IDLE; end
         endcase

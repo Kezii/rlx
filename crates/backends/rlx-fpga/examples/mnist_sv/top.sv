@@ -171,7 +171,7 @@ module top (
                 else if (stage == 4 && l4_done) cnext = C_STEP;
                 else if (stage == 5 && l5_done) cnext = C_STEP;
             end
-            C_STEP : cnext = (stage == 5) ? C_DONE : C_RUN;
+            C_STEP : if (stage == 5) cnext = C_DONE; else cnext = C_RUN;
             C_DONE : if (!start) cnext = C_IDLE;
         endcase
     end

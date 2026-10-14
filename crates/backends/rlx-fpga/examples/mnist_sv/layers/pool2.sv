@@ -83,10 +83,10 @@ module pool2_kernel (
             S_IDLE   : if (start) next = S_READ;
             S_READ   : next = S_WAIT;
             S_WAIT   : next = S_UPDATE;
-            S_UPDATE : next = (kh_i == KH - 1 && kw_i == KW - 1) ? S_WRITE : S_READ;
+            S_UPDATE : if (kh_i == KH - 1 && kw_i == KW - 1) next = S_WRITE; else next = S_READ;
             S_WRITE  : begin
                 y_we = 1'b1;
-                next = (oh == H_OUT - 1 && ow == W_OUT - 1 && oc == C - 1) ? S_DONE : S_READ;
+                if (oh == H_OUT - 1 && ow == W_OUT - 1 && oc == C - 1) next = S_DONE; else next = S_READ;
             end
             S_DONE   : begin done = 1'b1; if (!start) next = S_IDLE; end
         endcase

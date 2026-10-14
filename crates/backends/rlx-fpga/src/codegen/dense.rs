@@ -174,6 +174,10 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
             v.blank();
 
             v.line("logic [1:0] w_lane_q;");
+            // The weight ROM reads one cycle late; register the lane with it so
+            // the crumb/nibble select matches the byte actually on `w_byte`.
+            v.line("logic [1:0] w_lane;");
+            v.line("always_ff @(posedge clk) w_lane_q <= w_lane;");
             if hints.ternary_fast_path {
                 v.comment("Ternary fast path — direct crumb extraction (no DSP multiplier)");
                 v.line("logic [1:0] w_crumb;");
@@ -211,6 +215,10 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
             }
             v.blank();
 
+            v.line(&format!("logic [{}:0] m_i;", out_addr_bits - 1));
+            v.line(&format!("logic [{}:0] k_i;", in_addr_bits - 1));
+            v.line("logic signed [31:0] acc;");
+            v.blank();
             // Requant table source: ROM or localparam
             if let Some((m0_q31, shift_v)) = hints.shared_requant {
                 v.comment("Requant — shared (uniform across rows)");
@@ -265,16 +273,12 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
             }
             v.blank();
 
-            v.line(&format!("logic [{}:0] m_i;", out_addr_bits - 1));
-            v.line(&format!("logic [{}:0] k_i;", in_addr_bits - 1));
-            v.line("logic signed [31:0] acc;");
-            v.blank();
 
             v.comment("Address derivation");
             v.line(&format!("logic [{}:0] w_idx_logical;", w_log_bits - 1));
             v.always_comb(|v| {
                 v.line("w_idx_logical = m_i * IN_F + k_i;");
-                emit_byte_addr_lane(v, "w_addr", "w_lane_q", "w_idx_logical", w_log_bits, log2_per_byte);
+                emit_byte_addr_lane(v, "w_addr", "w_lane", "w_idx_logical", w_log_bits, log2_per_byte);
             });
             v.blank();
 
@@ -376,11 +380,11 @@ pub fn emit(layer: &Layer, hints: &Hints) -> LayerArtifacts {
                     v.line("S_LOAD_BIAS : next = S_BIAS_WAIT;");
                     v.line("S_BIAS_WAIT : next = S_INIT_ACC;");
                     v.line("S_INIT_ACC  : next = S_PIPE;");
-                    v.line("S_PIPE      : next = (done_issuing && prev_valid) ? S_WRITE : S_PIPE;");
+                    v.line("S_PIPE      : if (done_issuing && prev_valid) next = S_WRITE; else next = S_PIPE;");
                     v.line("S_WRITE     : begin");
                     v.block(|v| {
                         v.line("y_we = 1'b1;");
-                        v.line("next = (m_i == OUT_F - 1) ? S_DONE : S_LOAD_BIAS;");
+                        v.line("if (m_i == OUT_F - 1) next = S_DONE; else next = S_LOAD_BIAS;");
                     });
                     v.line("end");
                     v.line("S_DONE      : begin done = 1'b1; if (!start) next = S_IDLE; end");

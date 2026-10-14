@@ -97,7 +97,7 @@ pub fn emit(layer: &Layer) -> LayerArtifacts {
                     v.line("S_WRITE : begin");
                     v.block(|v| {
                         v.line("y_we = 1'b1;");
-                        v.line("next = (i == LEN - 1) ? S_DONE : S_READ;");
+                        v.line("if (i == LEN - 1) next = S_DONE; else next = S_READ;");
                     });
                     v.line("end");
                     v.line("S_DONE  : begin done = 1'b1; if (!start) next = S_IDLE; end");

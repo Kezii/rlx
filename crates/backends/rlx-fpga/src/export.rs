@@ -48,6 +48,11 @@ pub fn export_graph(
         cfg.from_graph.bind = cfg.io.bind.clone();
     }
     resolve_graph_sidebands(graph, &mut cfg.io)?;
+    // ×{-1,0,1} as add/sub/skip is exact, so every tune preset can take the
+    // multiplier-free MAC — it's the reason to export ternary at all.
+    if cfg.quant_mode == ExportQuantMode::Ternary {
+        cfg.tune.ternary_fast_path = true;
+    }
     let mut model = prepare_model(graph, cfg.quant_mode, &cfg.legalize, &cfg.from_graph)?;
     apply_output_kind(&mut model, cfg.output_kind);
     export_model(&model, &cfg, out_dir).map_err(|e| e.to_string())

@@ -326,7 +326,7 @@ impl Model {
                         && matches!(other, Op::Activation(_) | Op::Pool { .. }))
                     {
                         return Err("rlx-fpga: graph still has f32 / unquantized compute ops. \
-                             Quantize first (ExportQuantMode::Int8 | Int4 | Fp4 via \
+                             Quantize first (ExportQuantMode::Int8 | Int4 | Fp4 | Ternary via \
                              prepare_model / ExportSession), or lower to QConv2d / QMatMul."
                             .into());
                     }
