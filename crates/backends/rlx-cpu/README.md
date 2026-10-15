@@ -71,6 +71,8 @@ Keep both paths in sync when changing a Thunk variant.
 | `blas-accelerate`    | Apple Accelerate                             |
 | `blas-mkl`           | Intel MKL                                    |
 | `blas-openblas`      | OpenBLAS                                     |
+| `portable-gemm`      | no-BLAS builds: `m ≥ 8` GEMMs via the `gemm` crate's blocked kernels |
+| `int8-gemv`          | x86-64 AVX2 int8 decode GEMVs for Q4_K/Q5_K/Q6_K/Q8_0/Q4_0/Q4_1 (int8-rounded activation, as llama.cpp) |
 
 With `--no-default-features`, a portable scalar gemm is linked instead
 — slow, but useful on hosts without a system BLAS.

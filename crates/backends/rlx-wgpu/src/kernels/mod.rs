@@ -129,6 +129,7 @@ pub const CONV_TRANSPOSE3D_WGSL: &str = include_str!("conv_transpose3d.wgsl");
 pub const GROUP_NORM_BWD_WGSL: &str = include_str!("group_norm_backward.wgsl");
 pub const AXIAL_ROPE2D_WGSL: &str = include_str!("axial_rope2d.wgsl");
 pub const FAKE_QUANTIZE_WGSL: &str = include_str!("fake_quantize.wgsl");
+pub const ROUND_TO_FORMAT_WGSL: &str = include_str!("round_to_format.wgsl");
 pub const SCATTER_ADD_WGSL: &str = include_str!("scatter_add.wgsl");
 pub const TOPK_WGSL: &str = include_str!("topk.wgsl");
 pub const WELCH_PEAKS_GPU_WGSL: &str = include_str!("welch_peaks_gpu.wgsl");
@@ -496,6 +497,36 @@ pub struct AxialRope2dParams {
     pub in_off: u32,
     pub out_off: u32,
     pub n_total: u32,
+}
+
+/// Layout for `Op::RoundToFormat`. 48 bytes; `mode`: 0 none, 1 per-tensor, 2 block.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct RoundToFormatParams {
+    pub n: u32,
+    pub last_dim: u32,
+    pub block: u32,
+    pub mode: u32,
+    pub man_bits: i32,
+    pub emin: i32,
+    pub emax: i32,
+    pub max_normal: f32,
+    pub in_off: u32,
+    pub amax_off: u32,
+    pub out_off: u32,
+    pub _pad: u32,
+}
+
+impl RoundToFormatParams {
+    /// Threads to launch: one per element, or one per block in mode 2.
+    pub fn threads(&self, n: u32) -> u32 {
+        if self.mode == 2 {
+            let ld = self.last_dim.max(1);
+            (n / ld) * ld.div_ceil(self.block.max(1))
+        } else {
+            n
+        }
+    }
 }
 
 /// Layout for FakeQuantize (Fixed / PerBatch). 32 bytes.
@@ -2521,6 +2552,7 @@ static GROUP_NORM_BWD_BETA: OnceLock<Kernel> = OnceLock::new();
 static AXIAL_ROPE2D: OnceLock<Kernel> = OnceLock::new();
 static FAKE_QUANTIZE_FIXED: OnceLock<Kernel> = OnceLock::new();
 static FAKE_QUANTIZE_PERBATCH: OnceLock<Kernel> = OnceLock::new();
+static ROUND_TO_FORMAT: OnceLock<Kernel> = OnceLock::new();
 static LAYERNORM: OnceLock<Kernel> = OnceLock::new();
 static GROUP_NORM: OnceLock<Kernel> = OnceLock::new();
 static RMS_NORM_BWD: OnceLock<Kernel> = OnceLock::new();
@@ -3230,6 +3262,16 @@ pub fn fake_quantize_perbatch_kernel(device: &wgpu::Device) -> &'static Kernel {
             "rlx-wgpu fake_quantize_perbatch",
             FAKE_QUANTIZE_WGSL,
             "fake_quantize_perbatch",
+        )
+    })
+}
+pub fn round_to_format_kernel(device: &wgpu::Device) -> &'static Kernel {
+    ROUND_TO_FORMAT.get_or_init(|| {
+        build_kernel(
+            device,
+            "rlx-wgpu round_to_format",
+            ROUND_TO_FORMAT_WGSL,
+            "round_to_format",
         )
     })
 }

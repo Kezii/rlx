@@ -978,6 +978,14 @@ fn gguf_matmul_bt_m1_parallel(
     block_bytes: usize,
     block_elems: usize,
 ) {
+    // Q4_K included, unless the exact f32-activation arm below is asked for.
+    #[cfg(all(feature = "int8-gemv", target_arch = "x86_64"))]
+    if out.len() == n
+        && !(scheme == QuantScheme::GgufQ4K && q4k_exact_gemv())
+        && crate::int8_gemv::gemv(scheme, x_row, w_bytes, out, k)
+    {
+        return;
+    }
     if scheme == QuantScheme::GgufQ4K && k.is_multiple_of(QK_K) && block_elems == QK_K {
         // Independent output rows — no n-wide partial reduction.
         #[cfg(not(target_arch = "wasm32"))]
@@ -1225,33 +1233,36 @@ unsafe fn hsum_i32_avx2(v: std::arch::x86_64::__m256i) -> i32 {
 
 /// BOTH nibble halves of one 32-byte Q4 group, from a SINGLE load.
 ///
-/// The obvious form calls a per-half helper twice, which loads the same 32 `qs`
-/// bytes and rebuilds the mask constants each time. Q4_K stores the low nibbles
-/// of group `j` and the high nibbles of group `j+1` in the same bytes, and their
-/// two Q8 segments are adjacent, so one load feeds both dots. Returns
-/// `(lo_sum, hi_sum)` for the caller to scale by `sc0` / `sc1`.
+/// Q4_K stores the low nibbles of group `j` and the high nibbles of group
+/// `j+1` in the same bytes, and their two Q8 segments are adjacent, so one load
+/// feeds both. Returns the `maddubs` i16 pair sums `(lo, hi)` (max 15·127·2, so
+/// the caller's `madd` by a 6-bit scale cannot overflow).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn q4k_group32_q8_dot_avx2_both(qs: *const u8, q8_lo: *const i8) -> (i32, i32) {
+#[inline]
+unsafe fn q4k_group32_q8_maddubs_avx2(
+    qs: *const u8,
+    q8_lo: *const i8,
+) -> (std::arch::x86_64::__m256i, std::arch::x86_64::__m256i) {
     use std::arch::x86_64::*;
     unsafe {
         let qbytes = _mm256_loadu_si256(qs as *const __m256i);
         let mask = _mm256_set1_epi8(0x0F);
-        let ones = _mm256_set1_epi16(1);
         let nib_lo = _mm256_and_si256(qbytes, mask);
         let nib_hi = _mm256_and_si256(_mm256_srli_epi16(qbytes, 4), mask);
-        // The two activation groups are contiguous: lo uses [0,32), hi [32,64).
         let y_lo = _mm256_loadu_si256(q8_lo as *const __m256i);
         let y_hi = _mm256_loadu_si256(q8_lo.add(32) as *const __m256i);
-        let a = _mm256_madd_epi16(_mm256_maddubs_epi16(nib_lo, y_lo), ones);
-        let b = _mm256_madd_epi16(_mm256_maddubs_epi16(nib_hi, y_hi), ones);
-        (hsum_i32_avx2(a), hsum_i32_avx2(b))
+        (
+            _mm256_maddubs_epi16(nib_lo, y_lo),
+            _mm256_maddubs_epi16(nib_hi, y_hi),
+        )
     }
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn q4k_dot_q8_block_avx2(q4: &[u8], q8: &[u8]) -> f32 {
+    use std::arch::x86_64::*;
     unsafe {
         let d = half::f16::from_le_bytes([q4[0], q4[1]]).to_f32();
         let dmin = half::f16::from_le_bytes([q4[2], q4[3]]).to_f32();
@@ -1268,17 +1279,23 @@ unsafe fn q4k_dot_q8_block_avx2(q4: &[u8], q8: &[u8]) -> f32 {
             sumi_min += m as i32 * bs;
         }
 
-        let mut sumi = 0i32;
+        // Scale each group in-register (`madd` against the broadcast 6-bit
+        // scale) and reduce once per block. Integer sums are exact, so this is
+        // bit-identical to scaling per-group hsums — it just drops 7 of the 8
+        // horizontal reductions.
+        let mut acc = _mm256_setzero_si256();
         let mut is = 0usize;
         let mut yi = 0usize;
         for j in (0..8).step_by(2) {
             let (sc0, _) = q4k_scale_min_x86(j, scales);
             let (sc1, _) = q4k_scale_min_x86(j + 1, scales);
-            let (p0, p1) = q4k_group32_q8_dot_avx2_both(qs.add(is), q8s.add(yi));
-            sumi += sc0 as i32 * p0 + sc1 as i32 * p1;
+            let (p0, p1) = q4k_group32_q8_maddubs_avx2(qs.add(is), q8s.add(yi));
+            acc = _mm256_add_epi32(acc, _mm256_madd_epi16(p0, _mm256_set1_epi16(sc0 as i16)));
+            acc = _mm256_add_epi32(acc, _mm256_madd_epi16(p1, _mm256_set1_epi16(sc1 as i16)));
             yi += 64;
             is += 32;
         }
+        let sumi = hsum_i32_avx2(acc);
         d * yd * sumi as f32 - dmin * yd * sumi_min as f32
     }
 }
@@ -1714,6 +1731,35 @@ mod tests {
             max_err = max_err.max((fast[i] - slow[i]).abs());
         }
         assert!(max_err < 1e-3, "max_err={max_err}");
+    }
+
+    /// The AVX2 Q4_K × Q8_K block dot is all-integer up to the final scaling,
+    /// so it must equal the scalar reference EXACTLY, whatever order it
+    /// reduces in. Raw random bytes (not quantizer output) reach every 6-bit
+    /// scale/min pattern.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn q4k_avx2_block_dot_is_bit_exact() {
+        if !avx2_available() {
+            return;
+        }
+        let mut seed = 11u64;
+        let mut byte = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (seed >> 33) as u8
+        };
+        for _ in 0..200 {
+            let mut q4: Vec<u8> = (0..rlx_gguf::Q4K_BLOCK_BYTES).map(|_| byte()).collect();
+            q4[..2].copy_from_slice(&half::f16::from_f32(0.0123).to_le_bytes());
+            q4[2..4].copy_from_slice(&half::f16::from_f32(0.0045).to_le_bytes());
+            let x: Vec<f32> = (0..QK_K).map(|_| byte() as f32 / 128.0 - 1.0).collect();
+            let mut q8 = vec![0u8; rlx_gguf::Q8K_BLOCK_BYTES];
+            rlx_gguf::quantize_q8_k_row(&x, &mut q8);
+            // SAFETY: AVX2 checked above; full blocks.
+            let fast = unsafe { q4k_dot_q8_block_avx2(&q4, &q8) };
+            let slow = rlx_gguf::q4_k_dot_q8_k(&q4, &q8);
+            assert_eq!(fast.to_bits(), slow.to_bits(), "{fast} vs {slow}");
+        }
     }
 
     #[test]

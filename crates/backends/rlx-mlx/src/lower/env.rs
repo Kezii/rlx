@@ -3636,6 +3636,19 @@ pub fn lower_with_env_writeback(
                 ops::mul(&inv_std, &inner)?
             }
 
+            Op::RoundToFormat { format, scaling } => {
+                let x = lookup(&env, node.inputs[0])?;
+                let shape = node_input_shape(graph, node.inputs[0]);
+                let n = node.shape.num_elements().unwrap();
+                let last_dim = node.shape.dims().last().map_or(1, |d| d.unwrap_static());
+                // A per-tensor scale is recomputed in-kernel: the graph's
+                // `reduce_max(abs(x))` input propagates NaN on MLX, the
+                // reference ignores it.
+                crate::round_to_format::round_to_format_ondevice(
+                    x, &shape, n, last_dim, *format, *scaling,
+                )?
+            }
+
             Op::FakeQuantize {
                 bits,
                 axis,
@@ -3975,17 +3988,55 @@ pub fn lower_with_env_writeback(
                     ops::reshape(&perm, &[c_in_per_g, h, w_in, g * n_batch])?
                 };
 
-                let grad_trans = ops::conv_general(
-                    &in_trans,
-                    &cotan_trans,
-                    /* stride          = */ &[d(0), d(1)],
-                    /* padding_lo      = */ &pad_lo,
-                    /* padding_hi      = */ &pad_hi,
-                    /* kernel_dilation = */ &[s(0), s(1)],
-                    /* input_dilation  = */ &[1, 1],
-                    /* groups          = */ g,
-                    /* flip            = */ false,
-                )?;
+                // MLX's CUDA backend gets a grouped conv with a dilated kernel
+                // (here: groups > 1 with forward stride > 1) wrong — max |Δ| ≈ 1
+                // on `conv2d_backward_weight_groups_3_stride2`, while CPU and
+                // Metal MLX agree with the reference. Under the `cuda` build,
+                // run that case one group at a time with ungrouped convs and
+                // concatenate along C_out: the same sums, the same layout.
+                let per_group = cfg!(feature = "cuda") && g > 1 && (s(0) > 1 || s(1) > 1);
+                let grad_trans = if per_group {
+                    let c_out_per_g = c_out / g;
+                    let parts = (0..g)
+                        .map(|gi| {
+                            let xg = ops::slice(
+                                x,
+                                &[0, gi * c_in_per_g, 0, 0],
+                                &[n_batch, (gi + 1) * c_in_per_g, h, w_in],
+                            )?;
+                            let dyg = ops::slice(
+                                &cotan_trans,
+                                &[gi * c_out_per_g, 0, 0, 0],
+                                &[(gi + 1) * c_out_per_g, h_out, w_out, n_batch],
+                            )?;
+                            ops::conv_general(
+                                &ops::transpose(&xg, &[1, 2, 3, 0])?,
+                                &dyg,
+                                &[d(0), d(1)],
+                                &pad_lo,
+                                &pad_hi,
+                                &[s(0), s(1)],
+                                &[1, 1],
+                                1,
+                                false,
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let refs: Vec<&_> = parts.iter().collect();
+                    ops::concat(&refs, 3)?
+                } else {
+                    ops::conv_general(
+                        &in_trans,
+                        &cotan_trans,
+                        /* stride          = */ &[d(0), d(1)],
+                        /* padding_lo      = */ &pad_lo,
+                        /* padding_hi      = */ &pad_hi,
+                        /* kernel_dilation = */ &[s(0), s(1)],
+                        /* input_dilation  = */ &[1, 1],
+                        /* groups          = */ g,
+                        /* flip            = */ false,
+                    )?
+                };
                 // grad_trans: [C_in, kH, kW, C_out]. rlx layout wants
                 // [C_out, C_in, kH, kW] → perm [3, 0, 1, 2]. As with
                 // backward-input, `contiguous` is required to defeat

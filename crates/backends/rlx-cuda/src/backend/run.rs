@@ -40,8 +40,8 @@ use crate::kernels::{
     maxpool2d_backward_kernel, maxpool3d_backward_kernel, narrow_kernel, pad_kernel, pool1d_kernel,
     pool2d_kernel, pool3d_kernel, q_conv2d_kernel, q_matmul_kernel, quantize_i8_kernel,
     reduce_kernel, relu_backward_kernel, resize_nearest_2x_kernel, rms_norm_backward_kernel,
-    rms_norm_bwd_zero_kernel, rope_backward_kernel, rope_kernel, sample_kernel,
-    scatter_add_acc_kernel, scatter_add_zero_kernel, scatter_elements_kernel,
+    rms_norm_bwd_zero_kernel, rope_backward_kernel, rope_kernel, round_to_format_kernel,
+    sample_kernel, scatter_add_acc_kernel, scatter_add_zero_kernel, scatter_elements_kernel,
     scatter_nd_reduce_kernel, selective_scan_kernel, slice_kernel,
     softmax_cross_entropy_backward_kernel, softmax_cross_entropy_kernel,
     softmax_cross_entropy_with_logits_kernel, softmax_kernel, topk_kernel, transpose_kernel,
@@ -5729,6 +5729,50 @@ impl CudaExecutable {
                         launcher
                             .launch(cfg)
                             .expect("rlx-cuda: fake_quantize_fixed launch failed");
+                    }
+                }
+                Step::RoundToFormat {
+                    in_off,
+                    amax_off,
+                    out_off,
+                    n,
+                    last_dim,
+                    block,
+                    mode,
+                    man_bits,
+                    emin,
+                    emax,
+                    max_bits,
+                } => {
+                    let kernel = round_to_format_kernel(&self.ctx);
+                    let threads = if *mode == 2 {
+                        (*n / (*last_dim).max(1)) * (*last_dim).max(1).div_ceil((*block).max(1))
+                    } else {
+                        *n
+                    };
+                    let (grid, block_dim) = dispatch_grid_1d(threads.max(1), 256);
+                    let mut launcher = stream.launch_builder(&kernel.function);
+                    launcher
+                        .arg(self.arena.f32_buf_mut())
+                        .arg(n)
+                        .arg(last_dim)
+                        .arg(block)
+                        .arg(mode)
+                        .arg(man_bits)
+                        .arg(emin)
+                        .arg(emax)
+                        .arg(max_bits)
+                        .arg(in_off)
+                        .arg(amax_off)
+                        .arg(out_off);
+                    unsafe {
+                        launcher
+                            .launch(LaunchConfig {
+                                grid_dim: (grid, 1, 1),
+                                block_dim: (block_dim, 1, 1),
+                                shared_mem_bytes: 0,
+                            })
+                            .expect("rlx-cuda: round_to_format launch failed");
                     }
                 }
                 Step::FakeQuantizePerBatch {

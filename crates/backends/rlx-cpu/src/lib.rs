@@ -34,6 +34,8 @@ pub mod spd; // SPD-manifold Riemannian kernels (logm/expm/sqrtm, AIRM distance,
 pub mod spd_kernels; // CpuKernel impls for the core SPDNet ops (BiMap/ReEig/LogEig/SpdBatchNorm)
 pub use gguf_scheme::quant_scheme_for_ggml;
 pub mod im2col;
+#[cfg(all(feature = "int8-gemv", target_arch = "x86_64"))]
+mod int8_gemv;
 pub mod intrinsics;
 pub mod kernel_config;
 pub mod kernels;

@@ -1,0 +1,26 @@
+# Built-in FreeBSD target, PS5 SDK linker, std rebuilt from source (nightly).
+# The prebuilt std uses native TLS (PT_TLS), which the payload loader never
+# sets up; rebuilding std with emulated TLS matches the SDK's -femulated-tls.
+# `scripts/ps5-cc` adapts rustc's link line to `prospero-clang`.
+[build]
+target = "x86_64-unknown-freebsd"
+
+[unstable]
+build-std = ["std", "panic_unwind"]
+
+[target.x86_64-unknown-freebsd]
+linker = "scripts/ps5-cc"
+rustflags = ["-C", "target-cpu=znver2", "-Z", "tls-model=emulated"]
+
+
+# C dependencies (zstd-sys, bzip2-sys, …) build with the SDK's compiler against
+# Sony's headers. The shim drops cc-rs's `--target=` (it would override
+# prospero-clang's `x86_64-sie-ps5`) and keeps its other defaults — notably
+# the optimization level, which `CRATE_CC_NO_DEFAULTS` would also strip.
+[env]
+CC_x86_64_unknown_freebsd = { value = "scripts/ps5-cc", relative = true }
+AR_x86_64_unknown_freebsd = { value = "scripts/ps5-ar", relative = true }
+# zstd's trace hooks are weak imports that no Sony library provides; leave
+# them out rather than rely on the dynamic linker accepting an unresolved
+# weak symbol.
+CFLAGS_x86_64_unknown_freebsd = "-DZSTD_TRACE=0"

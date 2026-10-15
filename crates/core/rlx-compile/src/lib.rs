@@ -12,6 +12,7 @@ pub mod const_fold;
 pub mod cse;
 pub mod dce;
 pub mod dispatch_report;
+pub mod emulate_format;
 pub mod fusion_benefit;
 pub mod fusion_pipeline;
 pub mod fusion_target;

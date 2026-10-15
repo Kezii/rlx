@@ -167,6 +167,14 @@ impl Session {
             }
             None => graph,
         };
+        let upload_rounding = upload_rounding(&graph, options);
+        let graph = apply_number_format(graph, options);
+        let mut compiled = self.compile_graph_stage(graph, options);
+        compiled.set_upload_rounding(upload_rounding);
+        compiled
+    }
+
+    fn compile_graph_stage(&self, graph: Graph, options: &crate::CompileOptions) -> CompiledGraph {
         if rlx_ir::dynamic::has_dynamic_dims(&graph) && !self.coreml_native_flex() {
             return self.compile_deferred(graph, options.clone());
         }
@@ -190,6 +198,14 @@ impl Session {
         hir: HirModule,
         options: &crate::CompileOptions,
     ) -> Result<CompiledGraph, rlx_ir::hir::LowerError> {
+        // The number-format rewrite works on MIR; take the MIR route so it
+        // is not silently skipped for HIR-built graphs.
+        if options
+            .number_format
+            .is_some_and(|f| f != rlx_ir::NumberFormat::F32)
+        {
+            return Ok(self.compile_with(hir.lower_to_mir()?.into_graph(), options));
+        }
         let backend = self.create_backend();
         let executable = backend.compile_hir(hir, self.device, options)?;
         Ok(CompiledGraph::new(executable, self.device))
@@ -282,5 +298,64 @@ fn feature_name(device: Device) -> &'static str {
         Device::OpenGl => "opengl",
         Device::DirectX => "directx",
         Device::WebGpu => "webgpu",
+    }
+}
+
+/// Which weights to round on upload, and their row lengths: every float
+/// `Param` under a minifloat format, unless the graph rounds them itself
+/// (`params_in_graph`), the caller already did (`params_prerounded`), or the
+/// param is kept (`keep_params`).
+fn upload_rounding(
+    graph: &Graph,
+    options: &crate::CompileOptions,
+) -> Option<crate::compiled::UploadRounding> {
+    let Some(rlx_ir::NumberFormat::Float { format, scaling }) = options.number_format else {
+        return None;
+    };
+    let o = &options.number_format_options;
+    if o.params_in_graph || o.params_prerounded {
+        return None;
+    }
+    let row_len = graph
+        .nodes()
+        .iter()
+        .filter_map(|n| match &n.op {
+            rlx_ir::Op::Param { name }
+                if n.shape.dtype().is_float()
+                    && !o.keep_params.iter().any(|k| name.contains(k.as_str())) =>
+            {
+                let row = match n.shape.dims().last() {
+                    Some(rlx_ir::Dim::Static(r)) => *r,
+                    _ => 1,
+                };
+                Some((name.clone(), row.max(1)))
+            }
+            _ => None,
+        })
+        .collect();
+    Some(crate::compiled::UploadRounding {
+        format,
+        scaling,
+        row_len,
+    })
+}
+
+/// Apply [`CompileOptions::number_format`](crate::CompileOptions::number_format).
+fn apply_number_format(graph: Graph, options: &crate::CompileOptions) -> Graph {
+    use rlx_ir::NumberFormat;
+    match options.number_format {
+        None | Some(NumberFormat::F32) => graph,
+        Some(NumberFormat::Float { format, scaling }) => {
+            rlx_opt::rlx_compile::emulate_format::emulate_float_format(
+                graph,
+                format,
+                scaling,
+                &options.number_format_options,
+            )
+        }
+        Some(f @ (NumberFormat::F64 | NumberFormat::F64x2)) => panic!(
+            "number format {f} is not implemented in this build yet (double-single \
+             compute is in progress); use f32, f16, bf16 or a minifloat"
+        ),
     }
 }

@@ -181,6 +181,9 @@ fn op_kind(op: &Op) -> OpKind {
         | Op::ResizeNearest2x
         | Op::AxialRope2d { .. } => OpKind::DataMovement,
         Op::Input { .. } | Op::Param { .. } | Op::Constant { .. } => OpKind::Boundary,
+        // Defined f32 → f32: a mixed-precision pass relabeling it to F16 would
+        // have its kernel write f32 into a half-sized slot.
+        Op::RoundToFormat { .. } => OpKind::Boundary,
         // Control flow: treated as data movement (the inner sub-graph
         // gets its own precision policy applied separately).
         Op::If { .. } | Op::While { .. } => OpKind::DataMovement,

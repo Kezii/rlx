@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use super::{
     GeGluStage, GemmaDecodeLayerSpec, GemmaDecodeLayerStage, GemmaKvTapStage, GemmaRmsNormStage,
-    SelfAttnPrefillSpec,
+    HeadNormSpec, LayerScaleStage, SelfAttnPrefillSpec,
 };
 use crate::layer::LayerStack;
 use crate::stage::FlowStage;
@@ -21,6 +21,24 @@ pub enum GemmaLayerStyle {
     Gemma2,
     Gemma3,
     Gemma4,
+}
+
+impl GemmaLayerStyle {
+    /// Gemma 2/3/4 normalize the attention output (`post_attention_layernorm`)
+    /// and the FFN output, and use `pre_feedforward_layernorm` before the FFN;
+    /// Gemma 1 uses `post_attention_layernorm` as its pre-FFN norm.
+    pub fn sandwich_norms(self) -> bool {
+        self != GemmaLayerStyle::Gemma
+    }
+
+    /// Per-head Q/K norms (Gemma 3/4), plus the weightless V norm (Gemma 4).
+    pub fn head_norm(self, prefix: &str, eps: f32) -> Option<HeadNormSpec> {
+        match self {
+            GemmaLayerStyle::Gemma3 => Some(HeadNormSpec::gemma(prefix, false, eps)),
+            GemmaLayerStyle::Gemma4 => Some(HeadNormSpec::gemma(prefix, true, eps)),
+            _ => None,
+        }
+    }
 }
 
 /// Build prefill self-attention spec for one layer. `n_rot` controls
@@ -53,6 +71,9 @@ pub fn gemma_attn_spec(
         attn_logit_softcap,
         // Gemma uses HF NeoX rotate-half rope.
         rope_style: rlx_ir::op::RopeStyle::NeoX,
+        // Set from the layer style by `gemma_prefill_layer_composed`.
+        head_norm: None,
+        bias_input: None,
     }
 }
 
@@ -74,11 +95,14 @@ pub fn gemma_strided_layer_mask(layer: usize, window: usize, stride: usize) -> M
 pub fn gemma_prefill_layer_composed(
     layer_idx: usize,
     style: GemmaLayerStyle,
-    attn: SelfAttnPrefillSpec,
+    mut attn: SelfAttnPrefillSpec,
     eps: f32,
     kv_sink: Option<Arc<Mutex<Vec<rlx_ir::HirNodeId>>>>,
 ) -> FlowStage {
     let prefix = format!("model.layers.{layer_idx}");
+    if attn.head_norm.is_none() {
+        attn.head_norm = style.head_norm(&prefix, eps);
+    }
     let mut stack = LayerStack::named(format!("layer{layer_idx}"))
         .residual_save()
         .stage(FlowStage::GemmaRmsNorm(GemmaRmsNormStage::hf_layer(
@@ -103,19 +127,24 @@ pub fn gemma_prefill_layer_composed(
         if attn.k_eq_v {
             tap = tap.with_k_eq_v();
         }
+        if let Some(norm) = attn.head_norm.clone() {
+            tap = tap.with_head_norm(norm);
+        }
         stack = stack.stage(FlowStage::GemmaKvTap(tap));
     }
 
     stack = stack
         .self_attn_prefill(attn)
-        .linear(format!("{prefix}.self_attn.o_proj.weight"), true)
-        .residual_add()
-        .residual_save();
+        .linear(format!("{prefix}.self_attn.o_proj.weight"), true);
+    if style.sandwich_norms() {
+        stack = stack.stage(FlowStage::GemmaRmsNorm(GemmaRmsNormStage::hf_layer(
+            format!("{prefix}.post_attention_layernorm"),
+            eps,
+        )));
+    }
+    stack = stack.residual_add().residual_save();
 
-    stack = if matches!(
-        style,
-        GemmaLayerStyle::Gemma2 | GemmaLayerStyle::Gemma3 | GemmaLayerStyle::Gemma4
-    ) {
+    stack = if style.sandwich_norms() {
         stack.stage(FlowStage::GemmaRmsNorm(GemmaRmsNormStage::hf_layer(
             format!("{prefix}.pre_feedforward_layernorm"),
             eps,
@@ -129,17 +158,23 @@ pub fn gemma_prefill_layer_composed(
 
     stack = stack.stage(FlowStage::GeGlu(GeGluStage::hf_mlp(&prefix)));
 
-    if matches!(
-        style,
-        GemmaLayerStyle::Gemma2 | GemmaLayerStyle::Gemma3 | GemmaLayerStyle::Gemma4
-    ) {
+    if style.sandwich_norms() {
         stack = stack.stage(FlowStage::GemmaRmsNorm(GemmaRmsNormStage::hf_layer(
             format!("{prefix}.post_feedforward_layernorm"),
             eps,
         )));
     }
 
-    stack.residual_add().build()
+    stack = stack.residual_add();
+    // Gemma 4 scales each layer's output by a stored scalar; without it the
+    // residual stream grows layer over layer. Absent from Gemma 4 GGUFs (they
+    // ship `output_scale`) and from earlier generations.
+    if style == GemmaLayerStyle::Gemma4 {
+        stack = stack.stage(FlowStage::LayerScale(LayerScaleStage::optional(format!(
+            "{prefix}.layer_scalar"
+        ))));
+    }
+    stack.build()
 }
 
 /// MoE placeholder — dense Gemma paths use [`gemma_prefill_layer_composed`].

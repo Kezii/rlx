@@ -84,7 +84,9 @@ pub trait LmRunner: Send {
     /// default reports unsupported so existing runners keep compiling.
     fn prefill_logits(&mut self, _prompt_ids: &[u32]) -> anyhow::Result<Vec<f32>> {
         Err(anyhow::anyhow!(
-            "{}: host-driven logits decode (prefill_logits) unsupported",
+            "{}: host-driven logits decode (prefill_logits) unsupported — wrap \
+             this runner in `HostDriven` for a correct, slower version, or \
+             forward the family's own cached pair",
             self.family()
         ))
     }
@@ -93,7 +95,9 @@ pub trait LmRunner: Send {
     /// logits `[vocab]`. See [`LmRunner::prefill_logits`]. Default: unsupported.
     fn decode_logits(&mut self, _token: u32) -> anyhow::Result<Vec<f32>> {
         Err(anyhow::anyhow!(
-            "{}: host-driven logits decode (decode_logits) unsupported",
+            "{}: host-driven logits decode (decode_logits) unsupported — wrap \
+             this runner in `HostDriven` for a correct, slower version, or \
+             forward the family's own cached pair",
             self.family()
         ))
     }
@@ -161,6 +165,276 @@ pub trait LmRunner: Send {
         Err(anyhow::anyhow!(
             "this LmRunner does not support multimodal generation"
         ))
+    }
+}
+
+/// A boxed runner is a runner.
+///
+/// Needed because a server holds `Box<dyn LmRunner>` — the engine is chosen
+/// from a string at runtime — while anything generic over `R: LmRunner`,
+/// [`HostDriven`] included, needs a concrete type. Without this, the
+/// adapters in this module are unreachable from exactly the code that needs
+/// them most.
+impl LmRunner for Box<dyn LmRunner> {
+    fn family(&self) -> &'static str {
+        (**self).family()
+    }
+
+    fn vocab_size(&self) -> usize {
+        (**self).vocab_size()
+    }
+
+    fn predict_logits(&mut self, prompt_ids: &[u32]) -> anyhow::Result<Vec<f32>> {
+        (**self).predict_logits(prompt_ids)
+    }
+
+    fn generate(
+        &mut self,
+        prompt_ids: &[u32],
+        n_new: usize,
+        on_token: &mut dyn FnMut(u32) -> bool,
+    ) -> anyhow::Result<Vec<u32>> {
+        (**self).generate(prompt_ids, n_new, on_token)
+    }
+
+    fn prefill_logits(&mut self, prompt_ids: &[u32]) -> anyhow::Result<Vec<f32>> {
+        (**self).prefill_logits(prompt_ids)
+    }
+
+    fn decode_logits(&mut self, token: u32) -> anyhow::Result<Vec<f32>> {
+        (**self).decode_logits(token)
+    }
+
+    fn set_multimodal_phase_callback(
+        &mut self,
+        cb: Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>>,
+    ) {
+        (**self).set_multimodal_phase_callback(cb);
+    }
+
+    fn prefill_logits_reusing(
+        &mut self,
+        prompt: &[u32],
+        snap: &SessionSnapshot,
+        reuse_len: usize,
+    ) -> anyhow::Result<Vec<f32>> {
+        (**self).prefill_logits_reusing(prompt, snap, reuse_len)
+    }
+
+    fn export_session(&self) -> Option<SessionSnapshot> {
+        (**self).export_session()
+    }
+
+    fn restore_session(&mut self, snap: &SessionSnapshot) -> bool {
+        (**self).restore_session(snap)
+    }
+
+    fn kv_store_stats(&self) -> Option<(usize, usize, usize)> {
+        (**self).kv_store_stats()
+    }
+
+    fn supports_multimodal(&self) -> bool {
+        (**self).supports_multimodal()
+    }
+
+    fn generate_multimodal(
+        &mut self,
+        prompt: &str,
+        rgb: &[u8],
+        img_w: usize,
+        img_h: usize,
+        tokenizer: Option<&Path>,
+        n_new: usize,
+        on_token: &mut dyn FnMut(u32) -> bool,
+    ) -> anyhow::Result<Vec<u32>> {
+        (**self).generate_multimodal(prompt, rgb, img_w, img_h, tokenizer, n_new, on_token)
+    }
+}
+
+/// A host-driven decode pair for a runner that does not have one.
+///
+/// `prefill_logits` and `decode_logits` are what a server needs: the caller
+/// owns sampling, so temperature, a logit bias, log-probs and stop strings
+/// all live above the model. Both default to an error on this trait, which
+/// keeps families compiling — and turns a missing override into a runner
+/// that cannot generate at all for any caller that samples for itself. That
+/// is not hypothetical: `Llama32Runner` had both methods and simply did not
+/// forward them through the trait, so every request failed with
+/// "unsupported" while the fast path sat there unused.
+///
+/// This wrapper supplies the pair for any runner by re-prefilling the whole
+/// context each step, on top of `predict_logits`, which every runner must
+/// implement. It is O(n²) over a generation and no substitute for a
+/// family's cached path — it is the difference between slow and broken.
+///
+/// ```ignore
+/// let runner = HostDriven::new(my_runner);   // now `prefill_logits` works
+/// ```
+pub struct HostDriven<R: LmRunner> {
+    inner: R,
+    /// The sequence so far. Held here because a trait default cannot own
+    /// state, which is the reason the defaults could not be made to work
+    /// without a wrapper.
+    context: Vec<u32>,
+    warned: bool,
+}
+
+impl<R: LmRunner> HostDriven<R> {
+    pub fn new(inner: R) -> Self {
+        Self {
+            inner,
+            context: Vec::new(),
+            warned: false,
+        }
+    }
+
+    /// The runner underneath, for the family's own API.
+    pub fn inner(&self) -> &R {
+        &self.inner
+    }
+
+    pub fn inner_mut(&mut self) -> &mut R {
+        &mut self.inner
+    }
+
+    pub fn into_inner(self) -> R {
+        self.inner
+    }
+
+    /// Whether the slow path is in use: the family had no cached
+    /// host-driven pair and this is re-prefilling the whole context each
+    /// token.
+    ///
+    /// Worth asking, because the cost is quadratic and invisible — a server
+    /// that finds this true is serving correct answers at a price it did not
+    /// choose, and the fix is in the family's runner rather than here. This
+    /// crate does not log, so the answer is returned rather than printed.
+    pub fn fell_back(&self) -> bool {
+        self.warned
+    }
+
+    /// Said once rather than per token, and only where the host has asked
+    /// for it: a line per token would bury the output of the thing it is
+    /// warning about.
+    fn note_fallback(&mut self) {
+        if !self.warned {
+            self.warned = true;
+            if rlx_ir::env::var("RLX_WARN_SLOW_DECODE").is_some() {
+                eprintln!(
+                    "[lm] {}: no cached host-driven decode; re-prefilling the \
+                     whole context each token (O(n^2) over a generation)",
+                    self.inner.family()
+                );
+            }
+        }
+    }
+}
+
+impl<R: LmRunner> LmRunner for HostDriven<R> {
+    fn family(&self) -> &'static str {
+        self.inner.family()
+    }
+
+    fn vocab_size(&self) -> usize {
+        self.inner.vocab_size()
+    }
+
+    fn predict_logits(&mut self, prompt_ids: &[u32]) -> anyhow::Result<Vec<f32>> {
+        self.inner.predict_logits(prompt_ids)
+    }
+
+    fn generate(
+        &mut self,
+        prompt_ids: &[u32],
+        n_new: usize,
+        on_token: &mut dyn FnMut(u32) -> bool,
+    ) -> anyhow::Result<Vec<u32>> {
+        self.inner.generate(prompt_ids, n_new, on_token)
+    }
+
+    fn prefill_logits(&mut self, prompt_ids: &[u32]) -> anyhow::Result<Vec<f32>> {
+        // The family's own pair if it has one; this wrapper is for when it
+        // does not, and wrapping something that does should not make it
+        // slower.
+        match self.inner.prefill_logits(prompt_ids) {
+            Ok(logits) => {
+                self.context.clear();
+                self.context.extend_from_slice(prompt_ids);
+                Ok(logits)
+            }
+            Err(_) => {
+                self.note_fallback();
+                self.context.clear();
+                self.context.extend_from_slice(prompt_ids);
+                self.inner.predict_logits(prompt_ids)
+            }
+        }
+    }
+
+    fn decode_logits(&mut self, token: u32) -> anyhow::Result<Vec<f32>> {
+        if self.context.is_empty() {
+            anyhow::bail!(
+                "{}: decode_logits before prefill_logits — there is no \
+                 sequence to continue",
+                self.inner.family()
+            );
+        }
+        if let Ok(logits) = self.inner.decode_logits(token) {
+            self.context.push(token);
+            return Ok(logits);
+        }
+        self.note_fallback();
+        self.context.push(token);
+        let context = std::mem::take(&mut self.context);
+        let out = self.inner.predict_logits(&context);
+        self.context = context;
+        out
+    }
+
+    fn set_multimodal_phase_callback(
+        &mut self,
+        cb: Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>>,
+    ) {
+        self.inner.set_multimodal_phase_callback(cb);
+    }
+
+    fn prefill_logits_reusing(
+        &mut self,
+        prompt: &[u32],
+        snap: &SessionSnapshot,
+        reuse_len: usize,
+    ) -> anyhow::Result<Vec<f32>> {
+        self.inner.prefill_logits_reusing(prompt, snap, reuse_len)
+    }
+
+    fn export_session(&self) -> Option<SessionSnapshot> {
+        self.inner.export_session()
+    }
+
+    fn restore_session(&mut self, snap: &SessionSnapshot) -> bool {
+        self.inner.restore_session(snap)
+    }
+
+    fn kv_store_stats(&self) -> Option<(usize, usize, usize)> {
+        self.inner.kv_store_stats()
+    }
+
+    fn supports_multimodal(&self) -> bool {
+        self.inner.supports_multimodal()
+    }
+
+    fn generate_multimodal(
+        &mut self,
+        prompt: &str,
+        rgb: &[u8],
+        img_w: usize,
+        img_h: usize,
+        tokenizer: Option<&Path>,
+        n_new: usize,
+        on_token: &mut dyn FnMut(u32) -> bool,
+    ) -> anyhow::Result<Vec<u32>> {
+        self.inner
+            .generate_multimodal(prompt, rgb, img_w, img_h, tokenizer, n_new, on_token)
     }
 }
 
@@ -699,5 +973,185 @@ mod tests {
         // Non-GGUF never auto-packs.
         b.packed_weights = None;
         assert!(!b.resolved_packed(WeightFormat::Safetensors));
+    }
+}
+
+#[cfg(test)]
+mod host_driven_tests {
+    use super::*;
+
+    /// A runner with no host-driven pair, standing in for a family that has
+    /// not wired one up. Its logits are a deterministic function of the
+    /// context, so greedy decoding from the same prompt must give the same
+    /// tokens however it is driven.
+    struct NoPair {
+        vocab: usize,
+        prefills: usize,
+    }
+
+    impl LmRunner for NoPair {
+        fn family(&self) -> &'static str {
+            "nopair"
+        }
+        fn vocab_size(&self) -> usize {
+            self.vocab
+        }
+        fn predict_logits(&mut self, prompt_ids: &[u32]) -> anyhow::Result<Vec<f32>> {
+            self.prefills += 1;
+            // Peaks at (sum of context + len) % vocab, so the argmax moves
+            // with the context rather than being constant.
+            let pick = (prompt_ids.iter().map(|&t| t as usize).sum::<usize>() + prompt_ids.len())
+                % self.vocab;
+            let mut l = vec![0.0f32; self.vocab];
+            l[pick] = 1.0;
+            Ok(l)
+        }
+    }
+
+    /// A runner that *does* have the pair, to check the wrapper gets out of
+    /// the way rather than adding its slow path on top.
+    struct HasPair {
+        vocab: usize,
+        context: Vec<u32>,
+        prefills: usize,
+    }
+
+    impl LmRunner for HasPair {
+        fn family(&self) -> &'static str {
+            "haspair"
+        }
+        fn vocab_size(&self) -> usize {
+            self.vocab
+        }
+        fn predict_logits(&mut self, prompt_ids: &[u32]) -> anyhow::Result<Vec<f32>> {
+            self.prefills += 1;
+            let pick = (prompt_ids.iter().map(|&t| t as usize).sum::<usize>() + prompt_ids.len())
+                % self.vocab;
+            let mut l = vec![0.0f32; self.vocab];
+            l[pick] = 1.0;
+            Ok(l)
+        }
+        fn prefill_logits(&mut self, prompt_ids: &[u32]) -> anyhow::Result<Vec<f32>> {
+            self.context = prompt_ids.to_vec();
+            self.predict_logits(prompt_ids)
+        }
+        fn decode_logits(&mut self, token: u32) -> anyhow::Result<Vec<f32>> {
+            self.context.push(token);
+            let c = std::mem::take(&mut self.context);
+            let out = self.predict_logits(&c);
+            self.context = c;
+            out
+        }
+    }
+
+    fn host_driven_tokens<R: LmRunner>(r: &mut R, prompt: &[u32], n: usize) -> Vec<u32> {
+        let mut logits = LmRunner::prefill_logits(r, prompt).expect("prefill");
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let t = argmax_u32(&logits);
+            out.push(t);
+            logits = LmRunner::decode_logits(r, t).expect("decode");
+        }
+        out
+    }
+
+    #[test]
+    fn a_runner_without_the_pair_cannot_be_driven_by_a_server() {
+        // The state of affairs this wrapper exists for, pinned so the error
+        // keeps saying what to do about it.
+        let mut bare = NoPair {
+            vocab: 16,
+            prefills: 0,
+        };
+        let err = LmRunner::prefill_logits(&mut bare, &[1, 2])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unsupported"), "{err}");
+        assert!(
+            err.contains("HostDriven"),
+            "the error should name the fix: {err}"
+        );
+    }
+
+    #[test]
+    fn wrapping_it_gives_the_same_tokens_as_its_own_generate() {
+        // The cross-check that matters: the host-driven loop and the
+        // runner's own greedy loop are two ways of doing one thing, and a
+        // wrapper that quietly dropped or double-counted a token would
+        // still look plausible. Same prompt, same decoding, same tokens.
+        let prompt = [3u32, 5, 7];
+        let mut own = NoPair {
+            vocab: 16,
+            prefills: 0,
+        };
+        let want = own
+            .generate(&prompt, 6, &mut |_| true)
+            .expect("the default greedy loop");
+
+        let mut wrapped = HostDriven::new(NoPair {
+            vocab: 16,
+            prefills: 0,
+        });
+        let got = host_driven_tokens(&mut wrapped, &prompt, 6);
+        assert_eq!(got, want);
+        assert!(
+            wrapped.fell_back(),
+            "NoPair has no cached pair, so this is the slow path"
+        );
+    }
+
+    #[test]
+    fn wrapping_a_runner_that_has_the_pair_uses_it() {
+        // The wrapper must not impose its fallback on a family that already
+        // has a fast path — the cost of being wrapped should be nothing.
+        let mut wrapped = HostDriven::new(HasPair {
+            vocab: 16,
+            context: Vec::new(),
+            prefills: 0,
+        });
+        let got = host_driven_tokens(&mut wrapped, &[3, 5, 7], 6);
+        assert_eq!(got.len(), 6);
+        assert!(
+            !wrapped.fell_back(),
+            "the family's own pair should have been used"
+        );
+    }
+
+    #[test]
+    fn decoding_before_prefilling_says_so() {
+        // Rather than returning logits for an empty context, which reads as
+        // a working model answering nonsense.
+        let mut wrapped = HostDriven::new(NoPair {
+            vocab: 16,
+            prefills: 0,
+        });
+        let err = LmRunner::decode_logits(&mut wrapped, 4)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("before prefill"), "{err}");
+    }
+
+    #[test]
+    fn the_context_grows_by_exactly_one_token_per_step() {
+        // The failure this guards is an off-by-one in the fallback: a
+        // context that misses a token still decodes, and the only symptom
+        // is a worse answer.
+        let mut wrapped = HostDriven::new(NoPair {
+            vocab: 1024,
+            prefills: 0,
+        });
+        let prompt = [2u32, 4];
+        let mut logits = LmRunner::prefill_logits(&mut wrapped, &prompt).unwrap();
+        let mut expect: Vec<u32> = prompt.to_vec();
+        for _ in 0..5 {
+            let t = argmax_u32(&logits);
+            expect.push(t);
+            logits = LmRunner::decode_logits(&mut wrapped, t).unwrap();
+            // The stand-in's argmax is a function of the whole context, so
+            // reproducing it independently proves the wrapper fed the same
+            // context.
+            let want = (expect.iter().map(|&t| t as usize).sum::<usize>() + expect.len()) % 1024;
+            assert_eq!(argmax_u32(&logits) as usize, want, "context: {expect:?}");
+        }
     }
 }

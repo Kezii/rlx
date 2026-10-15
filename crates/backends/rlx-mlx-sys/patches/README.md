@@ -64,6 +64,21 @@ The patch makes `JitCompiler::available()` answer `false` on those platforms
 without asking, and keeps `exec()` compiling. MLX already treats an unavailable
 JIT compiler as a supported state and falls back to its non-compiled CPU
 kernels, so this costs a fast path that could never have existed there.
+## 0003 — CUDA JIT header roots
+
+MLX's NVRTC JIT looks for CUDA headers under `CUDA_HOME` / `CUDA_PATH` or a
+hard-coded `/usr/local/cuda`, and for the CCCL headers next to its own
+binary (`<bin>/../include/cccl`). A static `libmlx` linked into a Rust
+binary is never in that install tree, and `/usr/local/cuda` may be a
+different toolkit than the one MLX was built with — on CUDA 13 its CCCL
+headers also moved under `include/cccl`, so kernels fail with `cannot open
+source file "cuda/std/tuple"`.
+
+The patch points `MLX_CCCL_DIR` at the CCCL copy MLX installs (outside test
+builds too), and adds `MLX_CUDA_TOOLKIT_DIR`, which `build.rs` sets to the
+toolkit it chose, as the JIT's default header root. `CUDA_HOME` /
+`CUDA_PATH` still win.
+
 ## License
 
 MIT OR Apache-2.0.

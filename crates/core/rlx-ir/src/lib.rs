@@ -54,6 +54,7 @@ pub mod lowp_codec;
 pub mod measure;
 pub mod mir;
 pub mod module;
+pub mod number_format;
 pub mod numeric_check;
 pub mod nvfp4;
 pub mod op;
@@ -144,6 +145,7 @@ pub use logical_kernel::{
 pub use measure::{CacheBuster, Tick, time_ns};
 pub use mir::{MirModule, MirNode, MirNodeId, MirOp};
 pub use module::{GraphModule, GraphStage};
+pub use number_format::{FloatFormat, FormatScaling, NumberFormat};
 pub use numeric_check::{BadValue, DebugMode, DebugScanner, NanReport, check_node, first_bad};
 pub use op::{
     AdaNormKind, ChainOperand, ChainStep, Op, OpKind, PadMode, RegionPrologue, RopeStyle,

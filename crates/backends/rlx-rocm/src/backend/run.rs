@@ -5044,6 +5044,47 @@ impl RocmExecutable {
                         ]
                     );
                 }
+                Step::RoundToFormat {
+                    in_off,
+                    amax_off,
+                    out_off,
+                    n,
+                    last_dim,
+                    block,
+                    mode,
+                    man_bits,
+                    emin,
+                    emax,
+                    max_bits,
+                } => {
+                    let kernel = round_to_format_kernel(&self.ctx);
+                    let threads = if *mode == 2 {
+                        (*n / (*last_dim).max(1)) * (*last_dim).max(1).div_ceil((*block).max(1))
+                    } else {
+                        *n
+                    };
+                    let (grid, block_dim) = dispatch_grid_1d(threads.max(1), 256);
+                    crate::launch_kernel!(
+                        kernel,
+                        stream,
+                        (grid, 1, 1),
+                        (block_dim, 1, 1),
+                        [
+                            &mut arena_ptr,
+                            n,
+                            last_dim,
+                            block,
+                            mode,
+                            man_bits,
+                            emin,
+                            emax,
+                            max_bits,
+                            in_off,
+                            amax_off,
+                            out_off
+                        ]
+                    );
+                }
                 Step::FakeQuantizePerBatch {
                     in_off,
                     out_off,

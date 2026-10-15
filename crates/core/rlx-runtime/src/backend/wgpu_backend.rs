@@ -78,11 +78,18 @@ impl ExecutableGraph for WgpuExecutableWrapper {
         crate::ExecutableCapabilities {
             clone: true,
             gpu_handles: true,
-            // Device-resident KV row feed: `register_kv_row_feed` +
-            // `feed_kv_row`, backed by a shard-aware device-to-device arena
-            // copy. Without this the `Op::KvAppend` fast path does not remove
-            // the O(context) cost — the past KV is still re-uploaded each step.
-            kv_resident: true,
+            // NOT resident, despite having the feed. `register_kv_row_feed` +
+            // `feed_kv_row` are here (shard-aware device-to-device arena copy),
+            // but the recipe callers follow also needs `read_output_row` to keep
+            // a host mirror for bucket re-seeding and rollback, and rlx-wgpu has
+            // no row readback to delegate to — so this inherited the trait's
+            // `None` and claimed the flag anyway. Callers bound fine and then
+            // died on the first decode step (found via rlx-unlimited-ocr's
+            // resident decode: "resident K row read, layer 0"). Flip this back
+            // to `true` once rlx-wgpu grows a one-row staging readback and the
+            // wrapper forwards `read_output_row`; `kv_resident_implies_a_row_
+            // read_that_returns_the_row` is the test that will hold it honest.
+            kv_resident: false,
             typed_io: true,
             active_extent: true,
             ..crate::ExecutableCapabilities::NONE

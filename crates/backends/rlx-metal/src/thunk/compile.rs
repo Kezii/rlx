@@ -3053,6 +3053,25 @@ impl ThunkSchedule {
                     }
                 }
 
+                Op::RoundToFormat { format, scaling } => {
+                    use rlx_ir::FormatScaling;
+                    let (mode, block) = match scaling {
+                        FormatScaling::None => (0, 0),
+                        FormatScaling::PerTensor => (1, 0),
+                        FormatScaling::Block(b) => (2, *b),
+                    };
+                    Thunk::RoundToFormat {
+                        src: off(node.inputs[0]),
+                        amax: node.inputs.get(1).map(|&a| off(a)),
+                        dst: off(node.id),
+                        n: node.shape.num_elements().unwrap() as u32,
+                        last_dim: node.shape.dims().last().map_or(1, |d| d.unwrap_static()) as u32,
+                        block,
+                        mode,
+                        format: *format,
+                    }
+                }
+
                 Op::FakeQuantize {
                     bits,
                     axis,

@@ -279,7 +279,7 @@ impl FlowCtx<'_> {
     /// First load of a packed weight: register the U8 quant blob as a graph
     /// param (bytes attached at session time via `set_param_typed`), remember
     /// it for later stages, then emit the `DequantMatMul`.
-    fn register_packed_linear(
+    pub(crate) fn register_packed_linear(
         &mut self,
         input: &FlowValue,
         weight_key: &str,

@@ -72,6 +72,9 @@ pub mod batched_lu_kernel;
 pub mod dequant_q1_0;
 
 #[cfg(rlx_mlx_host)]
+pub mod round_to_format;
+
+#[cfg(rlx_mlx_host)]
 pub mod llada2_gate;
 // Host-only: depends on `op_registry` (itself `rlx_mlx_host`-gated). Without
 // this gate the module leaks onto non-host targets (e.g. iOS) and fails to

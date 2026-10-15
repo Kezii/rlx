@@ -39,6 +39,14 @@ pub struct CompileOptions {
     /// this element format + scale layout — any [`ScaledFormat`](rlx_ir::ScaledFormat), including a
     /// parameterized `Custom` (e.g. `f4e3m0`). Off by default; changes numerics.
     pub scaled_quant: Option<ScaledQuantConfig>,
+    /// Run the graph as if every value were stored in this format (weights,
+    /// inputs and every intermediate; see
+    /// [`emulate_format`](rlx_opt::rlx_compile::emulate_format)). `None` and
+    /// `Some(F32)` leave the graph untouched. Env: `RLX_NUMBER_FORMAT`.
+    pub number_format: Option<rlx_ir::NumberFormat>,
+    /// What the number-format rewrite leaves alone (pre-rounded weights, kept
+    /// params / ops). Env: `RLX_NUMBER_FORMAT_PARAMS_PREROUNDED`.
+    pub number_format_options: rlx_opt::rlx_compile::emulate_format::EmulateOptions,
     /// RNG policy for in-graph [`Op::RngNormal`](rlx_ir::Op::RngNormal) / [`Op::RngUniform`](rlx_ir::Op::RngUniform) nodes.
     pub rng: rlx_ir::RngOptions,
     /// Run dead-code elimination as part of compile. Default: true.
@@ -108,6 +116,8 @@ impl CompileOptions {
             precision: Precision::F32,
             policy: None,
             scaled_quant: None,
+            number_format: None,
+            number_format_options: Default::default(),
             rng: rlx_ir::RngOptions::default(),
             dce: true,
             constant_folding: true,
@@ -164,6 +174,19 @@ impl CompileOptions {
         if env_registry::flag("RLX_NO_IO_PEAKS_OUTPUT") {
             self.no_io_peaks_output = true;
         }
+        if let Some(spec) = env_registry::var("RLX_NUMBER_FORMAT") {
+            match spec.parse::<rlx_ir::NumberFormat>() {
+                Ok(f) => self.number_format = Some(f),
+                // A typo must not silently run the graph in f32.
+                Err(e) => panic!("RLX_NUMBER_FORMAT: {e}"),
+            }
+        }
+        if env_registry::flag("RLX_NUMBER_FORMAT_PARAMS_PREROUNDED") {
+            self.number_format_options.params_prerounded = true;
+        }
+        if let Some(list) = env_registry::var("RLX_NUMBER_FORMAT_KEEP") {
+            self.number_format_options.keep_ops = parse_keep_ops(&list);
+        }
     }
 
     pub fn new() -> Self {
@@ -184,6 +207,20 @@ impl CompileOptions {
     /// parameterized `ScaledFormat::custom(3, 0)` (`f4e3m0`).
     pub fn scaled_quant(mut self, cfg: ScaledQuantConfig) -> Self {
         self.scaled_quant = Some(cfg);
+        self
+    }
+    /// Round weights to `format` as they are uploaded, inserting nothing into
+    /// the graph. For a training graph whose forward was already rewritten
+    /// with [`emulate_format`](crate::emulate_format): the backward must not
+    /// round gradients, but each step's weight upload still should.
+    pub fn round_weights_on_upload(mut self, format: rlx_ir::NumberFormat) -> Self {
+        self.number_format = Some(format);
+        self.number_format_options.keep_ops = OpKind::ALL.to_vec();
+        self
+    }
+    /// Run the graph in `format` (see [`Self::number_format`]).
+    pub fn number_format(mut self, format: rlx_ir::NumberFormat) -> Self {
+        self.number_format = Some(format);
         self
     }
     pub fn rng(mut self, rng: rlx_ir::RngOptions) -> Self {
@@ -304,4 +341,25 @@ impl CompileOptions {
         self.disable_conv_bias_act_fusion = on;
         self
     }
+}
+
+/// `Softmax,RmsNorm` → those kinds; `!MatMul` → every kind but `MatMul`.
+/// Names are `OpKind`'s, case-insensitive. A typo panics rather than silently
+/// keeping nothing.
+fn parse_keep_ops(list: &str) -> Vec<OpKind> {
+    let kind = |name: &str| {
+        OpKind::ALL
+            .iter()
+            .copied()
+            .find(|k| format!("{k:?}").eq_ignore_ascii_case(name.trim()))
+            .unwrap_or_else(|| panic!("RLX_NUMBER_FORMAT_KEEP: unknown op kind {name:?}"))
+    };
+    if let Some(only) = list.trim().strip_prefix('!') {
+        let only = kind(only);
+        return OpKind::ALL.iter().copied().filter(|k| *k != only).collect();
+    }
+    list.split(',')
+        .filter(|s| !s.trim().is_empty())
+        .map(kind)
+        .collect()
 }

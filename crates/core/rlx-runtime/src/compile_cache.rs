@@ -448,6 +448,55 @@ impl BucketedCompileCache {
         Self::with_policy(device, buckets, policy)
     }
 
+    /// A ladder of at most `count` buckets over `[1, max]`, spaced
+    /// geometrically.
+    ///
+    /// Between one bucket and a power-of-two ladder there is a whole range
+    /// nobody could ask for, and the choice matters: every bucket is a
+    /// separately compiled graph holding its own copy of the parameters, so
+    /// the ladder's convenience is paid for in memory proportional to the
+    /// number of rungs. On a model being split across machines *because* it
+    /// does not fit, that is the wrong thing to spend. Measured on a 135M
+    /// model split two ways, max-seq 512: the full ladder cost 4669 MB
+    /// resident against 2065 MB for a single bucket.
+    ///
+    /// `count` buckets put a bound on the padding waste too: consecutive
+    /// extents differ by a factor of `max^(1/count)`, so a request padded up
+    /// to its bucket's extent wastes at most that much compute, against 2×
+    /// for the power-of-two ladder and up to `max` for a single bucket.
+    pub fn geometric_ladder(device: Device, max: u64, count: usize) -> Self {
+        Self::geometric_ladder_with_policy(device, max, count, None)
+    }
+
+    pub fn geometric_ladder_with_policy(
+        device: Device,
+        max: u64,
+        count: usize,
+        policy: Option<rlx_opt::PrecisionPolicy>,
+    ) -> Self {
+        let max = max.max(1);
+        let count = count.max(1);
+        if count == 1 {
+            return Self::with_policy(device, vec![1..(max + 1)], policy);
+        }
+        let mut buckets: Vec<Range<u64>> = Vec::new();
+        let mut start = 1u64;
+        for i in 1..=count {
+            // Geometric so the *ratio* between rungs is even, which is what
+            // bounds the padding; evenly spaced extents would waste almost
+            // everything at the short end, where most requests are.
+            let extent = ((max as f64).powf(i as f64 / count as f64)).ceil() as u64;
+            let extent = extent.max(start);
+            if extent >= max || i == count {
+                buckets.push(start..(max + 1));
+                break;
+            }
+            buckets.push(start..(extent + 1));
+            start = extent + 1;
+        }
+        Self::with_policy(device, buckets, policy)
+    }
+
     pub fn with_policy(
         device: Device,
         buckets: Vec<Range<u64>>,
@@ -714,6 +763,19 @@ impl BucketedCompileCache {
     ///
     /// If the recorded donor was evicted, tries any other live compiled bucket
     /// as a share source (needed when `RLX_KV_CACHE_MAX_RESIDENT=1` climbs).
+    /// Did any bucket end up sharing another's parameter buffer?
+    ///
+    /// Worth asking before compiling a ladder. Where this is true the rungs
+    /// are nearly free and more of them is a straight win; where it is false
+    /// each rung holds its own copy of the weights, and on a model split
+    /// across machines — which is to say a model that did not fit — that is
+    /// the dominant memory cost. It is a property of the backend, not of the
+    /// model: `share_params_from` defaults to doing nothing and only Metal
+    /// and MLX override it.
+    pub fn params_shared(&self) -> bool {
+        self.weight_donor_upper.is_some()
+    }
+
     pub fn try_share_params_from_donor(&mut self, dst_upper: u64) -> bool {
         if rlx_ir::env::var("RLX_METAL_NO_SHARE").is_some() {
             return false;
@@ -1041,6 +1103,15 @@ impl BucketedCompileCache {
             // beats uploading another copy: one buffer backs them all. Without
             // this, a decode that climbs the ladder holds a full set of weights
             // per rung — for a 0.6B f32 model that was ~10 GB of duplicates.
+            //
+            // **Only where the backend implements it.** `share_params_from`
+            // defaults to `false` and is overridden by Metal and MLX, so on
+            // CPU every rung still holds its own copy: measured on a 135M
+            // model split two ways, each extra decode bucket cost ~350 MB per
+            // rank, which is one copy of that rank's block. Ask
+            // [`Self::params_shared`] rather than assuming; a caller choosing
+            // how many rungs to compile is choosing how many copies of the
+            // weights to hold, on the backends that cannot share.
             //
             // Done here rather than at each call site because every caller of
             // this method wants it; `rlx-llama32` and `rlx-qwen35` had to
@@ -1457,6 +1528,112 @@ pub fn slice_rows(data: &[f32], inner: usize, actual: usize) -> Vec<f32> {
         "slice_rows: actual rows {actual} exceed upper {upper}",
     );
     data[..actual * inner].to_vec()
+}
+
+#[cfg(test)]
+mod geometric_tests {
+    use super::*;
+
+    fn extents(c: &BucketedCompileCache) -> Vec<(u64, u64)> {
+        c.buckets().map(|r| (r.start, r.end - 1)).collect()
+    }
+
+    #[test]
+    fn a_fresh_cache_is_not_sharing_anything() {
+        // The accessor exists so a caller can tell a cheap ladder from an
+        // expensive one. On CPU it stays false however many rungs compile,
+        // because `share_params_from` is a no-op there — each rung holds its
+        // own copy of the weights, measured at ~350 MB per rank per rung for
+        // a 135M model split two ways. A caller that assumed otherwise
+        // would be choosing the number of weight copies without knowing it.
+        let c = BucketedCompileCache::geometric_ladder(Device::Cpu, 512, 4);
+        assert!(
+            !c.params_shared(),
+            "nothing compiled yet, so nothing shared"
+        );
+    }
+
+    #[test]
+    fn the_sharing_hook_declines_by_default() {
+        // The contract the ladder's memory depends on: a backend that has
+        // not implemented sharing must say so rather than silently appear to
+        // share, because the caller's fallback is a full upload and getting
+        // that wrong leaves a graph with no weights.
+        struct Bare;
+        impl crate::backend::ExecutableGraph for Bare {
+            fn run(&mut self, _inputs: &[(&str, &[f32])]) -> Vec<Vec<f32>> {
+                Vec::new()
+            }
+            fn set_param(&mut self, _name: &str, _data: &[f32]) {}
+        }
+        let mut dst = Bare;
+        let src = Bare;
+        assert!(
+            !crate::backend::ExecutableGraph::share_params_from(&mut dst, &src),
+            "the default must decline"
+        );
+    }
+
+    #[test]
+    fn one_bucket_spans_the_whole_context() {
+        let c = BucketedCompileCache::geometric_ladder(Device::Cpu, 512, 1);
+        assert_eq!(extents(&c), vec![(1, 512)]);
+    }
+
+    #[test]
+    fn the_buckets_are_contiguous_and_cover_everything() {
+        // A gap is not a compile miss, it is a length that matches no
+        // bucket at all — so the cache silently never hits for it.
+        for max in [1u64, 2, 7, 512, 4096, 32768] {
+            for count in 1..=8usize {
+                let c = BucketedCompileCache::geometric_ladder(Device::Cpu, max, count);
+                let e = extents(&c);
+                assert_eq!(e[0].0, 1, "max={max} count={count}: {e:?}");
+                assert_eq!(e.last().unwrap().1, max, "max={max} count={count}: {e:?}");
+                for w in e.windows(2) {
+                    assert_eq!(w[0].1 + 1, w[1].0, "max={max} count={count}: {e:?}");
+                }
+                for (start, end) in &e {
+                    assert!(start <= end, "max={max} count={count}: {e:?}");
+                }
+                assert!(e.len() <= count, "max={max} count={count}: {e:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_length_lands_in_a_bucket() {
+        let c = BucketedCompileCache::geometric_ladder(Device::Cpu, 512, 4);
+        for past in 1..=512u64 {
+            assert!(c.bucket_for(past).is_some(), "past={past} matched nothing");
+        }
+    }
+
+    #[test]
+    fn more_buckets_means_less_padding() {
+        // The point of spending memory on extra graphs: a step is padded up
+        // to its bucket's extent, and more rungs put that extent nearer the
+        // real length.
+        let worst = |count: usize| {
+            let c = BucketedCompileCache::geometric_ladder(Device::Cpu, 4096, count);
+            extents(&c)
+                .into_iter()
+                .map(|(start, end)| end as f64 / start as f64)
+                .fold(0.0f64, f64::max)
+        };
+        let (one, four, eight) = (worst(1), worst(4), worst(8));
+        assert!(one > four, "one={one} four={four}");
+        assert!(four > eight, "four={four} eight={eight}");
+    }
+
+    #[test]
+    fn a_nonsense_request_still_gives_a_usable_cache() {
+        for (max, count) in [(0u64, 0usize), (0, 4), (1, 9999)] {
+            let c = BucketedCompileCache::geometric_ladder(Device::Cpu, max, count);
+            assert!(c.buckets().count() >= 1, "max={max} count={count}");
+            assert!(c.bucket_for(1).is_some(), "max={max} count={count}");
+        }
+    }
 }
 
 #[cfg(test)]

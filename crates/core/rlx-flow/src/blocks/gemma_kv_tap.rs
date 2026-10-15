@@ -32,6 +32,9 @@ pub struct GemmaKvTapStage {
     pub n_rot: usize,
     pub rope_table: Option<String>,
     pub k_eq_v: bool,
+    /// Per-head K (and V) norms, as in the attention block; the cache must
+    /// hold the same K/V the attention computes.
+    pub head_norm: Option<super::HeadNormSpec>,
     pub outputs: Arc<Mutex<Vec<rlx_ir::HirNodeId>>>,
 }
 
@@ -50,6 +53,7 @@ impl GemmaKvTapStage {
             n_rot: head_dim,
             rope_table: None,
             k_eq_v: false,
+            head_norm: None,
             outputs: sink,
         }
     }
@@ -73,6 +77,12 @@ impl GemmaKvTapStage {
         self.k_eq_v = true;
         self
     }
+
+    /// Normalize K (and V) per head before caching — Gemma 3/4.
+    pub fn with_head_norm(mut self, norm: super::HeadNormSpec) -> Self {
+        self.head_norm = Some(norm);
+        self
+    }
 }
 
 impl BlockStage for GemmaKvTapStage {
@@ -87,12 +97,25 @@ impl BlockStage for GemmaKvTapStage {
             Some(ctx.load_param(&format!("{lp}.self_attn.v_proj.weight"), true)?)
         };
 
+        let norms = match &self.head_norm {
+            Some(n) => Some(super::self_attn::LoadedHeadNorms::load(
+                ctx,
+                n,
+                self.head_dim,
+            )?),
+            None => None,
+        };
+
         let mut gb = HirMut::new(ctx.hir());
         let k = gb.mm(input.id, k_w);
         // V = K (pre-RoPE) when k_eq_v; otherwise its own matmul.
         let v = match v_w {
             Some(w) => gb.mm(input.id, w),
             None => k,
+        };
+        let (k, v) = match &norms {
+            Some(n) => (n.k(&mut gb, k), n.v(&mut gb, v)),
+            None => (k, v),
         };
         let k_rope = gb.rope_n(k, cos, sin, self.head_dim, self.n_rot);
 

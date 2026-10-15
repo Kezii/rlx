@@ -347,6 +347,27 @@ fn slices_overlap(a: &[f32], c: &[f32]) -> bool {
 }
 
 pub fn execute_thunks(schedule: &ThunkSchedule, arena_buf: &mut [u8]) {
+    // `RLX_CPU_EXEC_IN_POOL`: run the whole schedule on a pool worker. Called
+    // from outside the pool, every parallel kernel parks this thread until the
+    // workers finish and then waits for it to be woken — per GEMV, per
+    // attention, ~225 times per decoded token. On a worker the kernels' joins
+    // spin instead, and this thread's share of the work is done by the worker
+    // it runs on. Thread-local kernel state (MoE residency masks, counters)
+    // then lives on that worker.
+    #[cfg(not(target_arch = "wasm32"))]
+    if exec_in_pool() && rayon::current_thread_index().is_none() && crate::pool::num_threads() > 1 {
+        return rayon::scope(|_| execute_thunks_here(schedule, arena_buf));
+    }
+    execute_thunks_here(schedule, arena_buf)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn exec_in_pool() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| rlx_ir::env::flag("RLX_CPU_EXEC_IN_POOL"))
+}
+
+fn execute_thunks_here(schedule: &ThunkSchedule, arena_buf: &mut [u8]) {
     crate::moe_residency::reset_gmm_counters();
     if let Some(layers) = schedule.moe_resident_layers.clone() {
         crate::moe_residency::set_per_layer_masks(Some(layers));
@@ -2219,6 +2240,87 @@ pub fn execute_thunks(schedule: &ThunkSchedule, arena_buf: &mut [u8]) {
                         continue;
                     }
 
+                    // ── Decode (one query row) on x86-64: a task per head ──
+                    // Short rows take the sequential path below, which runs
+                    // every head on one thread; long ones take the strided
+                    // path, which without a BLAS is two loop-nest GEMMs. Both
+                    // compute the Q·K dot for padded keys whose score the
+                    // Custom mask then overwrites. With one query row the
+                    // heads are independent, so split them over the pool and
+                    // skip the dot for masked keys — the bulk of a decode
+                    // bucket until the context fills it. Per element this is
+                    // the sequential path's arithmetic (bit-identical there),
+                    // with eight keys' dots run side by side in AVX lanes
+                    // (`dots_by_key_lanes`); past the threshold it is taken
+                    // only without a BLAS, at a 512-row bucket ~11 ms of a
+                    // ~30 ms step on three cores.
+                    #[cfg(target_arch = "x86_64")]
+                    if b == 1
+                        && q_s == 1
+                        && nh > 1
+                        && (k_s <= cfg.sdpa_seq_threshold || cfg!(not(rlx_cpu_blas)))
+                        && *softcap == 0.0
+                        && matches!(
+                            mask_kind,
+                            rlx_ir::op::MaskKind::Custom | rlx_ir::op::MaskKind::None
+                        )
+                    {
+                        let custom = matches!(mask_kind, rlx_ir::op::MaskKind::Custom)
+                            && !mask_data.is_empty();
+                        let (q_d, k_d, v_d) = (q_data, k_data, v_data);
+                        let live: Vec<usize> = (0..k_s)
+                            .filter(|&ki| !custom || mask_data[ki] >= mask_thr)
+                            .collect();
+                        // 8-wide softmax chunks holding a live key (all of
+                        // them without a mask): the rest are masked only.
+                        let mut live_chunks: Vec<usize> = live.iter().map(|&ki| ki / 8).collect();
+                        live_chunks.dedup();
+                        live_chunks.retain(|&c| c < k_s / 8);
+                        let sparse_softmax = !live.is_empty()
+                            && std::is_x86_feature_detected!("avx2")
+                            && std::is_x86_feature_detected!("fma");
+                        let o_addr = out_data.as_mut_ptr() as usize;
+                        crate::pool::par_for(nh, 1, &|off, cnt| {
+                            let mut scores = vec![0f32; k_s];
+                            let mut dots = vec![0f32; live.len()];
+                            for hi in off..off + cnt {
+                                let kv_hi = hi / group;
+                                let q = &q_d[hi * dh..(hi + 1) * dh];
+                                dots_by_key_lanes(q, k_d, &live, krs, kv_hi * dh, &mut dots);
+                                scores.fill(mask_neg);
+                                for (&ki, &dot) in live.iter().zip(&dots) {
+                                    scores[ki] = dot * scale;
+                                }
+                                if sparse_softmax {
+                                    // SAFETY: AVX2 + FMA detected above.
+                                    crate::kernels::softmax_row_avx2_chunks(
+                                        &mut scores,
+                                        &live_chunks,
+                                    );
+                                } else {
+                                    crate::kernels::neon_softmax(&mut scores, 1, k_s);
+                                }
+                                // SAFETY: each head writes only its own
+                                // `dh_v` output columns.
+                                let o = std::slice::from_raw_parts_mut(
+                                    (o_addr as *mut f32).add(hi * dh_v),
+                                    dh_v,
+                                );
+                                o.fill(0.0);
+                                for &ki in &live {
+                                    let sc = scores[ki];
+                                    if sc > score_thr {
+                                        let v_off = ki * vrs + kv_hi * dh_v;
+                                        for d in 0..dh_v {
+                                            o[d] += sc * v_d[v_off + d];
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                        continue;
+                    }
+
                     // ── Auto-select kernel: NEON dots vs strided BLAS ───
                     // For tiny inputs (batch=1, short seq), per-head BLAS call
                     // overhead (~0.5µs × 2 calls × num_heads × num_layers)
@@ -3902,6 +4004,7 @@ pub fn execute_thunks(schedule: &ThunkSchedule, arena_buf: &mut [u8]) {
             Thunk::Quantize { .. } => exec_quantize(thunk, base),
             Thunk::Dequantize { .. } => exec_dequantize(thunk, base),
             Thunk::FakeQuantize { .. } => exec_fake_quantize(thunk, base),
+            Thunk::RoundToFormat { .. } => exec_round_to_format(thunk, base),
             Thunk::ActivationBackward { .. } => exec_activation_backward(thunk, base),
             Thunk::ActivationBackwardF64 { .. } => exec_activation_backward_f64(thunk, base),
             Thunk::FakeQuantizeLSQ { .. } => exec_fake_quantize_l_s_q(thunk, base),
@@ -4337,6 +4440,102 @@ pub fn execute_thunks(schedule: &ThunkSchedule, arena_buf: &mut [u8]) {
         // time went (per execute_thunks call — the hot subgraph stands out).
         dump_thunk_profile();
     }
+}
+
+/// `dots[j] = Σ_d q[d]·k[keys[j]·stride + off + d]`, summed in `d` order with
+/// one multiply and one add per term — exactly the scalar loop
+/// `dot += q[d] * k[d]`, so bit-identical to it. The scalar loop is a serial
+/// dependency on one accumulator (an add latency per element); here eight keys
+/// run in the eight lanes of one AVX register, fed by an 8×8 transpose of
+/// their rows.
+#[cfg(target_arch = "x86_64")]
+pub(super) fn dots_by_key_lanes(
+    q: &[f32],
+    k: &[f32],
+    keys: &[usize],
+    stride: usize,
+    off: usize,
+    dots: &mut [f32],
+) {
+    let n = q.len();
+    let avx = {
+        static AVX: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *AVX.get_or_init(|| std::is_x86_feature_detected!("avx"))
+    };
+    let lanes = if avx && n.is_multiple_of(8) {
+        keys.len()
+    } else {
+        0
+    };
+    for (j, group) in keys[..lanes].chunks(8).enumerate() {
+        // A short last group repeats its last key in the spare lanes.
+        let rows: [&[f32]; 8] = std::array::from_fn(|l| {
+            let ki = group[l.min(group.len() - 1)];
+            &k[ki * stride + off..ki * stride + off + n]
+        });
+        // SAFETY: AVX was detected; every row holds `n` floats.
+        let out = unsafe { dot8_avx(q, rows) };
+        dots[8 * j..8 * j + group.len()].copy_from_slice(&out[..group.len()]);
+    }
+    for (o, &ki) in dots[lanes..].iter_mut().zip(&keys[lanes..]) {
+        let row = &k[ki * stride + off..ki * stride + off + n];
+        let mut dot = 0f32;
+        for d in 0..n {
+            dot += q[d] * row[d];
+        }
+        *o = dot;
+    }
+}
+
+/// Eight [`dots_by_key_lanes`] dots, one per lane. `q.len()` is a multiple
+/// of 8.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx")]
+unsafe fn dot8_avx(q: &[f32], rows: [&[f32]; 8]) -> [f32; 8] {
+    use std::arch::x86_64::*;
+    let mut acc = _mm256_setzero_ps();
+    for d0 in (0..q.len()).step_by(8) {
+        // SAFETY: `d0 + 8 <= n` for `q` and every row. (Not `array::from_fn`:
+        // a closure does not inherit `#[target_feature]`.)
+        let mut r = [_mm256_setzero_ps(); 8];
+        for (rl, row) in r.iter_mut().zip(rows) {
+            *rl = unsafe { _mm256_loadu_ps(row[d0..].as_ptr()) };
+        }
+        // 8×8 transpose: `t[d]` holds element `d0 + d` of the eight rows.
+        let a0 = _mm256_unpacklo_ps(r[0], r[1]);
+        let a1 = _mm256_unpackhi_ps(r[0], r[1]);
+        let a2 = _mm256_unpacklo_ps(r[2], r[3]);
+        let a3 = _mm256_unpackhi_ps(r[2], r[3]);
+        let a4 = _mm256_unpacklo_ps(r[4], r[5]);
+        let a5 = _mm256_unpackhi_ps(r[4], r[5]);
+        let a6 = _mm256_unpacklo_ps(r[6], r[7]);
+        let a7 = _mm256_unpackhi_ps(r[6], r[7]);
+        let b0 = _mm256_shuffle_ps::<0x44>(a0, a2);
+        let b1 = _mm256_shuffle_ps::<0xEE>(a0, a2);
+        let b2 = _mm256_shuffle_ps::<0x44>(a1, a3);
+        let b3 = _mm256_shuffle_ps::<0xEE>(a1, a3);
+        let b4 = _mm256_shuffle_ps::<0x44>(a4, a6);
+        let b5 = _mm256_shuffle_ps::<0xEE>(a4, a6);
+        let b6 = _mm256_shuffle_ps::<0x44>(a5, a7);
+        let b7 = _mm256_shuffle_ps::<0xEE>(a5, a7);
+        let t = [
+            _mm256_permute2f128_ps::<0x20>(b0, b4),
+            _mm256_permute2f128_ps::<0x20>(b1, b5),
+            _mm256_permute2f128_ps::<0x20>(b2, b6),
+            _mm256_permute2f128_ps::<0x20>(b3, b7),
+            _mm256_permute2f128_ps::<0x31>(b0, b4),
+            _mm256_permute2f128_ps::<0x31>(b1, b5),
+            _mm256_permute2f128_ps::<0x31>(b2, b6),
+            _mm256_permute2f128_ps::<0x31>(b3, b7),
+        ];
+        for (d, td) in t.into_iter().enumerate() {
+            acc = _mm256_add_ps(acc, _mm256_mul_ps(_mm256_set1_ps(q[d0 + d]), td));
+        }
+    }
+    let mut out = [0f32; 8];
+    // SAFETY: `out` holds 8 floats.
+    unsafe { _mm256_storeu_ps(out.as_mut_ptr(), acc) };
+    out
 }
 
 #[inline(always)]

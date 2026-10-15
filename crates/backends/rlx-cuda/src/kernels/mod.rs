@@ -639,6 +639,12 @@ kernel_cache!(
     "fake_quantize_perbatch"
 );
 kernel_cache!(
+    ROUND_TO_FORMAT,
+    round_to_format_kernel,
+    ROUND_TO_FORMAT_CU,
+    "round_to_format"
+);
+kernel_cache!(
     FAKE_QUANTIZE_EMA,
     fake_quantize_ema_kernel,
     FAKE_QUANTIZE_CU,

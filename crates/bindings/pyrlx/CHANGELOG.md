@@ -6,6 +6,20 @@ and the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.18] — 2026-10-15
+
+Covers 0.2.17 as well — `pyproject.toml` had stayed at 0.2.16 there.
+
+### Added
+
+- `export_fpga` accepts `quant="ternary"` (BitNet b1.58) and
+  `hw="xc7:BOARD"` (openXC7: `arty-a7-35`, `arty-a7-100`, `basys3`,
+  `nexys-a7-100`).
+
+### Changed
+
+- Aligned with RLX workspace **0.2.18**.
+
 ## [0.2.16] — 2026-09-15
 
 Covers 0.2.15 as well — neither went out to PyPI.

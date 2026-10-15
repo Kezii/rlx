@@ -53,6 +53,29 @@ pub struct CompiledGraph {
     /// Empty means "not known" (e.g. compiled straight from HIR), in which case
     /// the f32 fast path is taken unchanged.
     io_dtypes: HashMap<String, rlx_ir::DType>,
+    /// Round weights to a number format as they are uploaded (see
+    /// [`CompileOptions::number_format`](crate::CompileOptions::number_format)).
+    /// `None` uploads them as given.
+    upload_rounding: Option<UploadRounding>,
+}
+
+/// Weight rounding applied on upload: one format, and the row length of each
+/// rounded param (blocks never cross a row).
+#[derive(Debug, Clone)]
+pub(crate) struct UploadRounding {
+    pub format: rlx_ir::FloatFormat,
+    pub scaling: rlx_ir::FormatScaling,
+    pub row_len: HashMap<String, usize>,
+}
+
+impl UploadRounding {
+    /// Rounded copy of `data` for `name`, or `None` when `name` is not rounded.
+    fn apply(&self, name: &str, data: &[f32]) -> Option<Vec<f32>> {
+        let row = *self.row_len.get(name)?;
+        let mut v = data.to_vec();
+        self.format.round_slice_scaled(&mut v, self.scaling, row);
+        Some(v)
+    }
 }
 
 impl Clone for CompiledGraph {
@@ -63,6 +86,7 @@ impl Clone for CompiledGraph {
             inner: self.inner.clone_box(),
             device: self.device,
             io_dtypes: self.io_dtypes.clone(),
+            upload_rounding: self.upload_rounding.clone(),
             staging: self.staging.as_ref().map(|s| {
                 Box::new(Staging {
                     prepare: s.prepare.clone(),
@@ -79,12 +103,18 @@ impl Clone for CompiledGraph {
 }
 
 impl CompiledGraph {
+    /// Round the params named in `rounding` on every later upload.
+    pub(crate) fn set_upload_rounding(&mut self, rounding: Option<UploadRounding>) {
+        self.upload_rounding = rounding;
+    }
+
     pub(crate) fn new(inner: Box<dyn ExecutableGraph>, device: Device) -> Self {
         Self {
             inner,
             device,
             staging: None,
             io_dtypes: HashMap::new(),
+            upload_rounding: None,
         }
     }
 
@@ -186,6 +216,11 @@ impl CompiledGraph {
     }
 
     pub fn set_param(&mut self, name: &str, data: &[f32]) {
+        let rounded = self
+            .upload_rounding
+            .as_ref()
+            .and_then(|r| r.apply(name, data));
+        let data = rounded.as_deref().unwrap_or(data);
         // A narrower-than-f32 weight needs converting, not reinterpreting:
         // `set_param` writes the bytes as given, and 4 bytes of f32 read as two
         // halves silently doubles the element count.
@@ -632,6 +667,17 @@ impl CompiledGraph {
     /// natively) on the way in. Lets callers feed F16/BF16 weights
     /// without a host-side cast.
     pub fn set_param_typed(&mut self, name: &str, data: &[u8], dtype: rlx_ir::DType) {
+        // Float weights are rounded through f32 and stored back in `dtype`;
+        // packed / integer weights are already in their own format.
+        let rounded = match &self.upload_rounding {
+            Some(r) if dtype.is_float() => {
+                let wide = crate::backend::widen_bytes_to_f32(data, dtype);
+                r.apply(name, &wide)
+                    .map(|v| crate::backend::narrow_f32_to_bytes(&v, dtype))
+            }
+            _ => None,
+        };
+        let data = rounded.as_deref().unwrap_or(data);
         if let Some(st) = self.staging.as_mut() {
             if st.prepare_params.contains(name) {
                 st.prepare.set_param_typed(name, data, dtype);
@@ -650,6 +696,15 @@ impl CompiledGraph {
     /// false → caller must fall back to a whole-buffer [`Self::set_param_typed`].
     /// Used by paged-MoE residency to upload only the changed expert slot.
     pub fn set_param_range(&mut self, name: &str, byte_offset: usize, data: &[u8]) -> bool {
+        // A partial write of a rounded weight cannot be block-rounded on its
+        // own; send the caller to the whole-buffer path, which rounds.
+        if self
+            .upload_rounding
+            .as_ref()
+            .is_some_and(|r| r.row_len.contains_key(name))
+        {
+            return false;
+        }
         if let Some(st) = self.staging.as_mut() {
             let mut done = false;
             if st.prepare_params.contains(name) {

@@ -42,6 +42,174 @@ pub struct SelfAttnPrefillSpec {
     /// [`rlx_ir::op::RopeStyle::GptJ`] for GGUF-Llama-style interleaved pairs so
     /// prefill matches the (already style-aware) decode path.
     pub rope_style: rlx_ir::op::RopeStyle,
+    /// Per-head RMS norms on Q/K (and optionally V) before RoPE — Gemma 3/4.
+    /// `None` for families without them.
+    pub head_norm: Option<HeadNormSpec>,
+    /// Name of a declared flow input holding an additive attention bias
+    /// (`[batch, heads?, seq, seq]`), used with [`MaskKind::Bias`] — e.g. a
+    /// media-span mask that lets image tokens attend bidirectionally.
+    pub bias_input: Option<String>,
+}
+
+/// Per-head RMS norms applied to the Q/K projections (and, for Gemma 4, a
+/// weightless one on V) before RoPE.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeadNormSpec {
+    pub q_key: String,
+    pub k_key: String,
+    /// Gemma's `x / rms(x) * (1 + w)` gain; plain `w` when false.
+    pub unit_offset: bool,
+    /// Weightless RMS norm on V (Gemma 4).
+    pub v_norm: bool,
+    pub eps: f32,
+}
+
+impl HeadNormSpec {
+    /// HF Gemma names under `prefix` (`model.layers.N`), `(1 + w)` gains.
+    pub fn gemma(prefix: &str, v_norm: bool, eps: f32) -> Self {
+        Self {
+            q_key: format!("{prefix}.self_attn.q_norm.weight"),
+            k_key: format!("{prefix}.self_attn.k_norm.weight"),
+            unit_offset: true,
+            v_norm,
+            eps,
+        }
+    }
+}
+
+/// [`HeadNormSpec`] with its gains loaded into the graph.
+pub(crate) struct LoadedHeadNorms {
+    q: rlx_ir::HirNodeId,
+    k: rlx_ir::HirNodeId,
+    q_ones: Option<rlx_ir::HirNodeId>,
+    k_ones: Option<rlx_ir::HirNodeId>,
+    v_ones: Option<rlx_ir::HirNodeId>,
+    beta: rlx_ir::HirNodeId,
+    eps: f32,
+    head_dim: usize,
+}
+
+impl LoadedHeadNorms {
+    pub(crate) fn load(
+        ctx: &mut FlowCtx<'_>,
+        spec: &HeadNormSpec,
+        head_dim: usize,
+    ) -> Result<Self> {
+        let q = ctx.load_param(&spec.q_key, false)?;
+        let k = ctx.load_param(&spec.k_key, false)?;
+        let ones = |ctx: &mut FlowCtx<'_>, name: String| {
+            synth_once(ctx, &name, vec![1.0; head_dim], head_dim)
+        };
+        let (q_ones, k_ones) = if spec.unit_offset {
+            (
+                Some(ones(ctx, format!("{}.ones", spec.q_key))),
+                Some(ones(ctx, format!("{}.ones", spec.k_key))),
+            )
+        } else {
+            (None, None)
+        };
+        let v_ones = spec
+            .v_norm
+            .then(|| ones(ctx, format!("head_norm.v.ones.{head_dim}")));
+        let beta = synth_once(
+            ctx,
+            &format!("head_norm.zero_beta.{head_dim}"),
+            vec![0.0; head_dim],
+            head_dim,
+        );
+        Ok(Self {
+            q,
+            k,
+            q_ones,
+            k_ones,
+            v_ones,
+            beta,
+            eps: spec.eps,
+            head_dim,
+        })
+    }
+
+    pub(crate) fn q(&self, gb: &mut HirMut, x: rlx_ir::HirNodeId) -> rlx_ir::HirNodeId {
+        let g = gain(gb, self.q, self.q_ones);
+        per_head_rms_any(gb, x, g, self.beta, self.head_dim, self.eps)
+    }
+
+    pub(crate) fn k(&self, gb: &mut HirMut, x: rlx_ir::HirNodeId) -> rlx_ir::HirNodeId {
+        let g = gain(gb, self.k, self.k_ones);
+        per_head_rms_any(gb, x, g, self.beta, self.head_dim, self.eps)
+    }
+
+    /// V unchanged unless the spec asks for the weightless V norm.
+    pub(crate) fn v(&self, gb: &mut HirMut, x: rlx_ir::HirNodeId) -> rlx_ir::HirNodeId {
+        match self.v_ones {
+            Some(ones) => per_head_rms_any(gb, x, ones, self.beta, self.head_dim, self.eps),
+            None => x,
+        }
+    }
+}
+
+fn gain(
+    gb: &mut HirMut,
+    w: rlx_ir::HirNodeId,
+    ones: Option<rlx_ir::HirNodeId>,
+) -> rlx_ir::HirNodeId {
+    match ones {
+        Some(o) => gb.add(o, w),
+        None => w,
+    }
+}
+
+/// A synthesized `[len]` param registered once per name: several stages of a
+/// layer (KV tap, attention) ask for the same constant, and two `Param` nodes
+/// with one name would be two independent values to the runtime.
+pub(crate) fn synth_once(
+    ctx: &mut FlowCtx<'_>,
+    name: &str,
+    data: Vec<f32>,
+    len: usize,
+) -> rlx_ir::HirNodeId {
+    let cache_key = format!("synth:{name}");
+    if let Some(&id) = ctx.state.loaded_params.get(&cache_key) {
+        return id;
+    }
+    let id = ctx.synth_param(name, data, rlx_ir::Shape::new(&[len], rlx_ir::DType::F32));
+    ctx.state.loaded_params.insert(cache_key, id);
+    id
+}
+
+/// RMS-normalize each `head_dim`-wide head of `x` (`[…, heads·head_dim]`),
+/// whatever its leading shape; one leading dim may be dynamic.
+fn per_head_rms_any(
+    gb: &mut HirMut,
+    x: rlx_ir::HirNodeId,
+    gamma: rlx_ir::HirNodeId,
+    beta: rlx_ir::HirNodeId,
+    head_dim: usize,
+    eps: f32,
+) -> rlx_ir::HirNodeId {
+    let sh = gb.shape(x);
+    let rank = sh.rank();
+    let lead: Vec<i64> = (0..rank - 1)
+        .map(|i| {
+            let d = sh.dim(i);
+            if d.is_static() {
+                d.unwrap_static() as i64
+            } else {
+                -1
+            }
+        })
+        .collect();
+    let width = sh.dim(rank - 1).unwrap_static();
+    let heads = (width / head_dim) as i64;
+    let split: Vec<i64> = lead
+        .iter()
+        .copied()
+        .chain([heads, head_dim as i64])
+        .collect();
+    let merged: Vec<i64> = lead.iter().copied().chain([width as i64]).collect();
+    let r = gb.reshape_(x, split);
+    let n = gb.rms_norm(r, gamma, beta, eps);
+    gb.reshape_(n, merged)
 }
 
 impl SelfAttnPrefillSpec {
@@ -66,6 +234,8 @@ impl SelfAttnPrefillSpec {
             score_scale: None,
             attn_logit_softcap: None,
             rope_style: rlx_ir::op::RopeStyle::NeoX,
+            head_norm: None,
+            bias_input: None,
         }
     }
 
@@ -95,6 +265,19 @@ impl SelfAttnPrefillSpec {
         self.k_eq_v = true;
         self
     }
+
+    /// Apply per-head Q/K (and optionally V) RMS norms before RoPE.
+    pub fn with_head_norm(mut self, norm: HeadNormSpec) -> Self {
+        self.head_norm = Some(norm);
+        self
+    }
+
+    /// Mask with the additive bias in flow input `name` ([`MaskKind::Bias`]).
+    pub fn with_bias_input(mut self, name: impl Into<String>) -> Self {
+        self.mask = MaskKind::Bias;
+        self.bias_input = Some(name.into());
+        self
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +304,18 @@ impl BlockStage for SelfAttnPrefillStage {
             Some(ctx.load_param(&spec.v_key, true)?)
         };
 
+        let norms = match &spec.head_norm {
+            Some(n) => Some(LoadedHeadNorms::load(ctx, n, spec.head_dim)?),
+            None => None,
+        };
+        let bias =
+            match &spec.bias_input {
+                Some(name) => Some(ctx.state.inputs.get(name).map(|(id, _)| *id).ok_or_else(
+                    || anyhow::anyhow!("self-attn bias input `{name}` not declared"),
+                )?),
+                None => None,
+            };
+
         let mut gb = HirMut::new(ctx.hir());
         let q = gb.mm(input.id, q_w);
         let k = gb.mm(input.id, k_w);
@@ -130,6 +325,10 @@ impl BlockStage for SelfAttnPrefillStage {
             Some(w) => gb.mm(input.id, w),
             None => k,
         };
+        let (q, k, v) = match &norms {
+            Some(n) => (n.q(&mut gb, q), n.k(&mut gb, k), n.v(&mut gb, v)),
+            None => (q, k, v),
+        };
         let q_rope = gb.rope_n_styled(q, cos, sin, spec.head_dim, spec.n_rot, spec.rope_style);
         let k_rope = gb.rope_n_styled(k, cos, sin, spec.head_dim, spec.n_rot, spec.rope_style);
 
@@ -138,17 +337,31 @@ impl BlockStage for SelfAttnPrefillStage {
         let v_rep = repeat_kv(&mut gb, v, spec.num_kv_heads, spec.head_dim, group);
 
         let attn_shape = shape::attention_shape(gb.shape(q_rope));
-        let attn = gb.attention_kind_opts(
-            q_rope,
-            k_rep,
-            v_rep,
-            spec.num_heads,
-            spec.head_dim,
-            spec.mask,
-            attn_shape,
-            spec.score_scale,
-            spec.attn_logit_softcap,
-        );
+        let attn = match bias {
+            Some(bias) => gb.inner().mir(
+                rlx_ir::ops::attention::attention_kind_op(
+                    spec.num_heads,
+                    spec.head_dim,
+                    None,
+                    MaskKind::Bias,
+                    spec.score_scale,
+                    spec.attn_logit_softcap,
+                ),
+                vec![q_rope, k_rep, v_rep, bias],
+                attn_shape,
+            ),
+            None => gb.attention_kind_opts(
+                q_rope,
+                k_rep,
+                v_rep,
+                spec.num_heads,
+                spec.head_dim,
+                spec.mask,
+                attn_shape,
+                spec.score_scale,
+                spec.attn_logit_softcap,
+            ),
+        };
         Ok(Some(ctx.wrap(attn, input.shape.clone())))
     }
 }

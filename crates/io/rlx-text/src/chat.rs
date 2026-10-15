@@ -832,13 +832,16 @@ mod tests {
         // template could not render at all. The error named only whichever one
         // the template reached first, which made it look like a single missing
         // method.
+        //
+        // Booleans print as Python's `True` / `False` (minijinja ≥ 2.24), the
+        // way transformers' Jinja2 renders these templates.
         let cases = [
-            (r#"{{ "hello world".startswith("hello") }}"#, "true"),
-            (r#"{{ "hello world".startswith("nope") }}"#, "false"),
-            (r#"{{ "a.txt".endswith(".txt") }}"#, "true"),
+            (r#"{{ "hello world".startswith("hello") }}"#, "True"),
+            (r#"{{ "hello world".startswith("nope") }}"#, "False"),
+            (r#"{{ "a.txt".endswith(".txt") }}"#, "True"),
             // Python accepts a tuple of candidates, and templates use that form.
-            (r#"{{ "a.md".endswith([".txt", ".md"]) }}"#, "true"),
-            (r#"{{ "a.rs".endswith([".txt", ".md"]) }}"#, "false"),
+            (r#"{{ "a.md".endswith([".txt", ".md"]) }}"#, "True"),
+            (r#"{{ "a.rs".endswith([".txt", ".md"]) }}"#, "False"),
             (r#"{{ "a,b,c".split(",") | join("|") }}"#, "a|b|c"),
             (r#"{{ "a,b,c".split(",", 1) | join("|") }}"#, "a|b,c"),
             (r#"{{ "a b  c".split() | length }}"#, "3"),

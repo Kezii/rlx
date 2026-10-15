@@ -130,6 +130,7 @@ pub const SUPPORTED_OPS: &[rlx_ir::OpKind] = {
         // Native Fixed + PerBatch; LSQ forward reuses Fixed; LSQ bwd + STE
         // FakeQuantizeBackward + INT8 Quantize/Dequantize are native kernels.
         FakeQuantize,
+        RoundToFormat,
         FakeQuantizeLSQ,
         FakeQuantizeLSQBackwardX,
         FakeQuantizeLSQBackwardScale,

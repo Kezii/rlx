@@ -339,6 +339,7 @@ pub enum OpKind {
     FakeQuantizeLSQ,
     FakeQuantizeLSQBackwardX,
     FakeQuantizeLSQBackwardScale,
+    RoundToFormat,
     Binary,
     Compare,
     Where,
@@ -819,6 +820,28 @@ pub enum Op {
         axis: Option<usize>,
         ste: SteKind,
         scale_mode: ScaleMode,
+    },
+
+    /// Round every element to a binary float format emulated on `f32` — the
+    /// "compute in f16 / f8 / f4 / fNeXmY" primitive behind
+    /// [`crate::number_format::NumberFormat`].
+    ///
+    /// `out[i] = s · format.round(x[i] / s)` where the power-of-two scale `s`
+    /// comes from `scaling`: `1` for `None`, [`FloatFormat::pow2_scale`] of the
+    /// block's largest magnitude for `Block(n)` (runs of `n` along the last
+    /// axis), or of the whole tensor's for `PerTensor` — in which case that
+    /// magnitude arrives as a second, scalar input (`reduce_max(abs(x))`), so
+    /// the kernel stays a single elementwise pass. Bit-identical on every
+    /// backend to [`FloatFormat::round_slice_scaled`].
+    ///
+    /// Backward is the straight-through estimator: the gradient passes to `x`
+    /// unchanged, none to the scale input.
+    ///
+    /// [`FloatFormat::pow2_scale`]: crate::number_format::FloatFormat::pow2_scale
+    /// [`FloatFormat::round_slice_scaled`]: crate::number_format::FloatFormat::round_slice_scaled
+    RoundToFormat {
+        format: crate::number_format::FloatFormat,
+        scaling: crate::number_format::FormatScaling,
     },
 
     /// Learned Step Size Quantization (LSQ; Esser et al. 2020,
@@ -3083,6 +3106,7 @@ impl Op {
             Op::FakeQuantizeLSQ { .. } => OpKind::FakeQuantizeLSQ,
             Op::FakeQuantizeLSQBackwardX { .. } => OpKind::FakeQuantizeLSQBackwardX,
             Op::FakeQuantizeLSQBackwardScale { .. } => OpKind::FakeQuantizeLSQBackwardScale,
+            Op::RoundToFormat { .. } => OpKind::RoundToFormat,
             Op::Binary(_) => OpKind::Binary,
             Op::Compare(_) => OpKind::Compare,
             Op::Where => OpKind::Where,
@@ -3364,6 +3388,11 @@ impl Op {
                 ScaleMode::EMA { .. } | ScaleMode::Fixed => 2,
             },
             Op::FakeQuantizeLSQ { .. } => 2, // x, scale (learned param)
+            // x, plus the tensor-wide max magnitude for per-tensor scaling.
+            Op::RoundToFormat { scaling, .. } => match scaling {
+                crate::number_format::FormatScaling::PerTensor => 2,
+                _ => 1,
+            },
             Op::FakeQuantizeLSQBackwardX { .. } | Op::FakeQuantizeLSQBackwardScale { .. } => 3, // x, scale, dy
             Op::Binary(_)
             | Op::Compare(_)
@@ -3598,6 +3627,16 @@ impl std::fmt::Display for Op {
                     "fake_quant(bits={bits},axis={d},ste={ste:?},scale={scale_mode:?})"
                 ),
             },
+            Op::RoundToFormat { format, scaling } => {
+                write!(
+                    f,
+                    "round_to({})",
+                    crate::number_format::NumberFormat::Float {
+                        format: *format,
+                        scaling: *scaling,
+                    }
+                )
+            }
             Op::FakeQuantizeLSQ { bits, axis } => match axis {
                 None => write!(f, "fake_quant_lsq(bits={bits})"),
                 Some(d) => write!(f, "fake_quant_lsq(bits={bits},axis={d})"),

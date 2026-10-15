@@ -13,14 +13,14 @@ semantics. Curated Public list: `just env-catalog`.
 | Internal | Bench / tooling |
 | Deprecated | Use replace_with |
 
-**Registered names:** 643  
+**Registered names:** 655  
 **Unregistered mentions (migration leftovers):** 136
 
 ## Groups
 
-- [compile](#compile) — 22
+- [compile](#compile) — 25
 - [coreml](#coreml) — 14
-- [cpu](#cpu) — 31
+- [cpu](#cpu) — 32
 - [cuda](#cuda) — 70
 - [debug](#debug) — 13
 - [device](#device) — 4
@@ -29,8 +29,8 @@ semantics. Curated Public list: `just env-catalog`.
 - [gpu](#gpu) — 4
 - [gpu-host](#gpu-host) — 1
 - [metal](#metal) — 191
-- [misc](#misc) — 98
-- [mlx](#mlx) — 20
+- [misc](#misc) — 103
+- [mlx](#mlx) — 23
 - [oneapi](#oneapi) — 5
 - [onnx](#onnx) — 5
 - [qnn](#qnn) — 1
@@ -65,6 +65,9 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_MEM_VERIFY` | Internal | Bool | Compile | Run the memory-planner invariant self-check |
 | `RLX_NO_IO_PEAKS_OUTPUT` | Public | Bool | Compile | Disable compile-time IO-gated peaks-only fusion |
 | `RLX_NO_WEIGHT_CONCAT_FUSION` | Internal | Bool | Compile | Skip the fusions that concatenate weights into one buffer |
+| `RLX_NUMBER_FORMAT` | Public | String | Compile | Run graphs in this number format: f32|f64|f64x2|f16|bf16|f8|f6|f4|fNeXmY|fXmYeZ[@none|@tensor|@b<N>] |
+| `RLX_NUMBER_FORMAT_KEEP` | Public | String | Compile | Comma list of op kinds (e.g. Softmax,RmsNorm) whose outputs stay unrounded under RLX_NUMBER_FORMAT; `!Kind` rounds ONLY that kind |
+| `RLX_NUMBER_FORMAT_PARAMS_PREROUNDED` | Public | Bool | Compile | Weights are already rounded to RLX_NUMBER_FORMAT on the host; skip in-graph weight rounding |
 | `RLX_PIN_OUTPUT_ANCESTORS` | Internal | Bool | Compile | Give every output ancestor its own arena slot |
 | `RLX_PLAN_VERIFY` | Bisect | Bool | Compile | Re-derive every memory-plan offset with the O(N^3) candidate scan and assert the sweep agrees |
 
@@ -106,6 +109,7 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_CPU_DUMP_DIR` | Internal | Path | Backend(cpu) | Directory for RLX_CPU_DUMP_NODE_DATA output |
 | `RLX_CPU_DUMP_NODE_DATA` | Internal | String | Backend(cpu) | Write listed nodes' raw f32 arena buffers to files |
 | `RLX_CPU_DUMP_THUNKS` | Internal | String | Backend(cpu) | Print compiled thunks in a <lo>:<hi> index range |
+| `RLX_CPU_EXEC_IN_POOL` | Internal | Bool | Backend(cpu) | Run each CPU schedule on a thread-pool worker, so parallel kernels join by spinning instead of parking the caller |
 | `RLX_CPU_MATMUL_F64_ACCUM` | Public | Bool | Backend(cpu) | Accumulate the CPU matmul K-reduction in f64 (precision/validated mode; default-off, vendor-BLAS fast path untouched) |
 | `RLX_CPU_ROW_TABS` | Internal | U64 | Backend(cpu) | Per-row sum of |x| for one node id |
 | `RLX_CPU_SME` | Internal | String | Backend(cpu) | Opt in to the direct ARM SME2 GEMM path (Apple M4+) |
@@ -497,6 +501,7 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_FORCE_DEVICE` | Bisect | Bool | Tooling | Hard-pin the backend, overriding the cost model's device choice |
 | `RLX_FUSED_GPU_CONIC_SCANLINE` | Bisect | Bool | Compile | Experimental GPU conic scanline splat rasterizer |
 | `RLX_GGUF_MATMUL_LEGACY` | Bisect | Bool | Tooling | Use the legacy GGUF matmul dispatch instead of gguf_matmul_bt_dispatch |
+| `RLX_GGUF_PACKED_Q4_1` | Internal | Bool | Tooling | Keep GGUF Q4_1 tensors packed for DequantMatMul (CPU, Metal, MLX) instead of expanding them to F32 |
 | `RLX_GGUF_TRACE` | Bisect | Bool | Tooling | Trace GGUF header and tensor parsing |
 | `RLX_GPU_HANDLE_HOST_MIRROR` | Bisect | Bool | Tooling | Mirror GPU handle outputs to the host on every read |
 | `RLX_GPU_TUNING_CACHE` | Public | Path | Tooling | Path to the persisted GPU dispatch tuning cache (measured kernel-variant + tile winners per arch/op/shape-bucket); unset = under $XDG_CACHE_HOME |
@@ -536,6 +541,7 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_NO_SHUFFLE` | Internal | Bool | Tooling | Do not shuffle the training set between epochs |
 | `RLX_OPENXC7_IMAGE` | Internal | String | Tooling | Container image for the opt-in openXC7 bitstream test (rlx-fpga) |
 | `RLX_ORT_CUDA_GRAPH` | Bisect | Bool | Tooling | Enable CUDA graph capture in the ONNX Runtime CUDA provider |
+| `RLX_PACKED_LM_HEAD` | Internal | Bool | Tooling | Project the LM head through the checkpoint's packed quant blob instead of an F32 copy |
 | `RLX_PARITY_DEVICE` | Bisect | Bool | Tooling | Device the parity harness compares against: cuda (default) | rocm |
 | `RLX_PHASE_TIMING` | Bisect | Bool | Tooling | Print wall time for each compiler phase |
 | `RLX_PRECISION` | Internal | String | Tooling | Mixed-precision policy for the graph (default F32) |
@@ -548,6 +554,8 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_QWEN3_F16_WEIGHTS` | Internal | Bool | Tooling | Store Qwen3 weights in f16 to halve decode weight bandwidth |
 | `RLX_QWEN3_FUSED_QKV` | Internal | Bool | Tooling | Fuse Q/K/V into one DequantMatMul (packed weights only) |
 | `RLX_QWEN3_GQA_NATIVE` | Internal | Bool | Tooling | Index K/V natively in the SDPA kernels instead of expanding for GQA |
+| `RLX_QWEN3_HOST_EMBED` | Internal | Bool | Tooling | Native packed CPU Qwen3: gather token embeddings from the GGUF on the host instead of an F32 table per graph |
+| `RLX_QWEN3_PREFILL_DECODE` | Internal | Bool | Tooling | Qwen3 resident decode: feed the prompt through the decode graph token by token instead of compiling a prefill graph |
 | `RLX_RANK` | Internal | String | Runtime | This process's rank in a distributed run |
 | `RLX_RIG_RUNTIME` | Bisect | Bool | Tooling | Where the device sweep runs: local (default) or a rig host |
 | `RLX_ROPE_DEBUG` | Bisect | Bool | Tooling | Print RoPE table strides and rotation indices |
@@ -561,6 +569,7 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_TRACE_THUNK` | Bisect | Bool | Tooling | Print each CPU thunk as it executes |
 | `RLX_UMAP_CUDA_FUSED_KNN` | Bisect | Bool | Tooling | Use the fused GPU kNN path in UMAP |
 | `RLX_USE_ICB` | Bisect | Bool | Tooling | Opt in to Metal indirect command buffers |
+| `RLX_WARN_SLOW_DECODE` | Internal | Bool | Runtime | Warn once when an LM runner has no cached decode and re-prefills the whole context per token |
 | `RLX_WG_LAYERS` | Internal | String | Runtime | Layer count for the whole-graph capture probe |
 | `RLX_WINOGRAD` | Bisect | Bool | Tooling | Opt in to the Winograd convolution path |
 | `RLX_WORKER_ERR_DIR` | Internal | String | Runtime | Directory distributed workers write captured errors to |
@@ -569,8 +578,10 @@ semantics. Curated Public list: `just env-catalog`.
 
 | Name | Stability | Kind | Layer | Summary |
 |------|-----------|------|-------|---------|
+| `RLX_MLX_CCACHE` | Bisect | String | Backend(mlx) | Compiler cache for the MLX build: sccache, ccache, a path, or off; default: sccache, else ccache |
 | `RLX_MLX_COMPILE_MAX_NODES` | Bisect | U64 | Backend(mlx) | Max graph nodes MLX will compile as one Compiled unit (default 1536) |
-| `RLX_MLX_CUDA_ARCH` | Bisect | Bool | Backend(mlx) | CUDA arch to build MLX for |
+| `RLX_MLX_CUDA_ARCH` | Bisect | String | Backend(mlx) | CUDA arch to build MLX for |
+| `RLX_MLX_CUDA_ROOT` | Bisect | Path | Backend(mlx) | CUDA toolkit dir (with bin/nvcc) to build MLX against; default: auto-select |
 | `RLX_MLX_DEBUG_EVAL` | Bisect | Bool | Backend(mlx) | Log every MLX eval boundary |
 | `RLX_MLX_DEQUANT_CACHE_BYTES` | Bisect | U64 | Backend(mlx) | Byte budget for the MLX dequantized-weight cache |
 | `RLX_MLX_DEQUANT_CACHE_DISABLE` | Bisect | Bool | Backend(mlx) | Disable the MLX dequantized-weight cache |
@@ -579,9 +590,10 @@ semantics. Curated Public list: `just env-catalog`.
 | `RLX_MLX_GGUF_HOST_FALLBACK` | Public | Bool | Backend(mlx) | Force host GGUF dequant on MLX |
 | `RLX_MLX_GROUPED_ONDEVICE` | Internal | Bool | Backend(mlx) | Keep grouped-MoE gather on device instead of host-staging (experiment) |
 | `RLX_MLX_GROUPED_ONDEVICE_MAX_BYTES` | Internal | U64 | Backend(mlx) | Byte budget guarding RLX_MLX_GROUPED_ONDEVICE (default 2e9) |
-| `RLX_MLX_JOBS` | Bisect | Bool | Backend(mlx) | Parallel job count for the MLX CMake build |
+| `RLX_MLX_JOBS` | Bisect | U64 | Backend(mlx) | Parallel job count for the MLX CMake build |
 | `RLX_MLX_KEEP_WARM` | Internal | String | Backend(mlx) | Skip the per-tensor WILLNEED/DONTNEED madvise on MLX loads |
 | `RLX_MLX_MODE` | Public | Enum | Backend(mlx) | eager | lazy | compiled execution mode |
+| `RLX_MLX_NO_CCACHE` | Bisect | Bool | Backend(mlx) | Build MLX without a compiler cache (same as RLX_MLX_CCACHE=off) |
 | `RLX_MLX_PARAM_VIEW` | Bisect | Bool | Backend(mlx) | Hold MLX parameters as views rather than owned arrays |
 | `RLX_MLX_PROFILE` | Bisect | Bool | Backend(mlx) | Dump the per-op-kind wall-time breakdown once |
 | `RLX_MLX_Q1_HOST` | Bisect | Bool | Backend(mlx) | Dequantize Q1 weights on the host instead of through MLX |
@@ -881,7 +893,6 @@ Identifiers still appearing in the tree but not yet in the registry (docs, bench
 | `RLX_MLX_BENCH_PROFILE` | `rig.sh` |
 | `RLX_MLX_COMPILE_OUTPUT_CAP` | `crates/backends/rlx-mlx/src/config.rs` |
 | `RLX_MLX_CUDA` | `crates/backends/rlx-mlx-sys/build.rs` |
-| `RLX_MLX_NO_CCACHE` | `crates/backends/rlx-mlx-sys/build.rs` |
 | `RLX_MLX_OK` | `crates/backends/rlx-mlx/src/lib.rs` |
 | `RLX_MPSGRAPH_ATTENTION` | `crates/backends/rlx-metal/src/mps_graph.rs` |
 | `RLX_NODE_ERR_ARG` | `crates/bindings/rlx-ffi/src/lib.rs` |
@@ -900,6 +911,7 @@ Identifiers still appearing in the tree but not yet in the registry (docs, bench
 | `RLX_QNN_HTP_LIB` | `Justfile` |
 | `RLX_QWEN25_GGUF` | `rig.sh` |
 | `RLX_QWEN3_F16_LM_HEAD` | `CHANGELOG.md` |
+| `RLX_QWEN3_NO_INPLACE_KV` | `CHANGELOG.md` |
 | `RLX_QWEN3_PARITY` | `CHANGELOG.md` |
 | `RLX_QWEN3_RETENTION` | `docs/README.md` |
 | `RLX_QWEN3_RETENTION_DEBUG` | `docs/kv-retention.md` |

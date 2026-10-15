@@ -568,6 +568,15 @@ pub fn compile_thunks_with_rng(
                 ste,
                 scale_mode,
             } => compile_fake_quantize(node, graph, arena, &matmul_fold, &rng_shared, rng),
+            Op::RoundToFormat { format, scaling } => Thunk::RoundToFormat {
+                x: node_offset(arena, node.inputs[0]),
+                out: node_offset(arena, node.id),
+                len: node.shape.num_elements().unwrap() as u32,
+                last_dim: node.shape.dims().last().map_or(1, |d| d.unwrap_static()) as u32,
+                amax: node.inputs.get(1).map(|&a| node_offset(arena, a)),
+                format: *format,
+                scaling: *scaling,
+            },
             Op::FakeQuantizeLSQ { bits, axis } => {
                 compile_fake_quantize_l_s_q(node, graph, arena, &matmul_fold, &rng_shared, rng)
             }

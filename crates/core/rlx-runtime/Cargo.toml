@@ -233,8 +233,8 @@ rlx-gguf = { workspace = true }
 rlx-pkg = { workspace = true, optional = true }
 rlx-mlx-io = { workspace = true, optional = true }
 rlx-dduf = { workspace = true, optional = true }
-# rlx-gpu = { path = "../rlx-gpu", version = "0.2.17", optional = true }
-# rlx-cuda = { path = "../../backends/rlx-cuda", version = "0.2.17", optional = true }
+# rlx-gpu = { path = "../rlx-gpu", version = "0.2.18", optional = true }
+# rlx-cuda = { path = "../../backends/rlx-cuda", version = "0.2.18", optional = true }
 
 # rlx-metal is Apple-only (Metal is an Apple API). Make it a dependency solely on
 # Apple targets — excluding watchOS, which has no Metal compute — so the `metal`
@@ -268,7 +268,7 @@ rlx-flow = { workspace = true }
 rayon = "1"
 rlx-compile = { workspace = true, features = ["training"] }
 # rlx-splat moved out of tree; splat examples/tests below are disabled until it returns.
-# rlx-splat = { path = "../rlx-splat", version = "0.2.17", default-features = false, features = ["test-support", "io"] }
+# rlx-splat = { path = "../rlx-splat", version = "0.2.18", default-features = false, features = ["test-support", "io"] }
 # Downstream demonstration packages used in integration tests.
 # `metal`/`mlx` are enabled ONLY on macOS (see the target-specific
 # dev-dependencies below) — those backends exist solely on Apple, and on a

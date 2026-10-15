@@ -1,0 +1,76 @@
+#version 450
+// Op::RoundToFormat: round to a binary float format emulated on f32, with an
+// optional power-of-two scale. Bit-identical to
+// `rlx_ir::FloatFormat::round_slice_scaled`: exponent, NaN/inf and subnormal
+// tests read the f32 bits; `ldexp` and `roundEven` are exact here.
+// One work-item per element, or per block when mode == 2.
+layout(local_size_x = 64) in;
+
+layout(push_constant) uniform PC {
+    uint n;
+    uint last_dim;
+    uint block;
+    uint mode;      // 0 none, 1 per-tensor (amax at amax_off), 2 per block
+    int man_bits;
+    int emin;
+    int emax;
+    float max_normal;
+    uint in_off;
+    uint amax_off;
+    uint out_off;
+} pc;
+
+int f32_exp(float a) { return int((floatBitsToUint(a) >> 23) & 0xffu) - 127; }
+
+float flush(float y) {
+    uint b = floatBitsToUint(y);
+    return (b & 0x7fffffffu) < 0x00800000u ? uintBitsToFloat(b & 0x80000000u) : y;
+}
+
+float round_fmt(float x) {
+    uint bits = floatBitsToUint(x);
+    uint ab = bits & 0x7fffffffu;
+    uint sgn = bits & 0x80000000u;
+    if (ab == 0u || ab > 0x7f800000u) { return x; }
+    if (ab < 0x00800000u) { return uintBitsToFloat(sgn); }
+    uint maxb = floatBitsToUint(pc.max_normal);
+    if (ab >= maxb) { return uintBitsToFloat(sgn | maxb); }
+    float ax = uintBitsToFloat(ab);
+    int shift = pc.man_bits - max(f32_exp(ax), pc.emin);
+    uint qb = min(floatBitsToUint(ldexp(roundEven(ldexp(ax, shift)), -shift)), maxb);
+    return uintBitsToFloat(sgn | (qb < 0x00800000u ? 0u : qb));
+}
+
+// Bits of |x|, or 0 for NaN, so NaN never wins a maximum.
+uint abs_bits(float x) {
+    uint b = floatBitsToUint(x) & 0x7fffffffu;
+    return b > 0x7f800000u ? 0u : b;
+}
+
+int scale_exp(uint amax_bits) {
+    if (amax_bits == 0u || amax_bits >= 0x7f800000u) { return 0; }
+    return clamp(int(amax_bits >> 23) - 127 - pc.emax, -126, 127);
+}
+
+float round_scaled(float x, int e) { return flush(ldexp(round_fmt(ldexp(x, -e)), e)); }
+
+void main() {
+    uint t = gl_GlobalInvocationID.x;
+    if (pc.mode == 2u) {
+        uint per_row = (pc.last_dim + pc.block - 1u) / pc.block;
+        uint row = t / per_row;
+        uint start = row * pc.last_dim + (t % per_row) * pc.block;
+        if (start >= pc.n) { return; }
+        uint end = min(start + pc.block, row * pc.last_dim + pc.last_dim);
+        uint m = 0u;
+        for (uint i = start; i < end; i++) { m = max(m, abs_bits(arena_load(pc.in_off + i))); }
+        int e = scale_exp(m);
+        for (uint i = start; i < end; i++) {
+            arena_store(pc.out_off + i, round_scaled(arena_load(pc.in_off + i), e));
+        }
+        return;
+    }
+    if (t >= pc.n) { return; }
+    int e = pc.mode == 1u ? scale_exp(abs_bits(arena_load(pc.amax_off))) : 0;
+    arena_store(pc.out_off + t, round_scaled(arena_load(pc.in_off + t), e));
+}

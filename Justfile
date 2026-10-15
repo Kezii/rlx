@@ -506,6 +506,20 @@ lint-features:
         lint "rlx-ir test-support"          -p rlx-ir      --features test-support
         ;;
     esac
+    # Default-off feature gates every host compiles.
+    lint "rlx-flow formats"                 -p rlx-flow    --features formats
+    lint "rlx-cpu int8-gemv,portable-gemm"  -p rlx-cpu     --no-default-features --features int8-gemv,portable-gemm
+    # The int8 GEMVs and the decode-attention lanes are `cfg(target_arch =
+    # "x86_64")`: an Apple Silicon host never compiles them. Cross-lint them
+    # when the x86-64 macOS target is installed (`rustup target add
+    # x86_64-apple-darwin`).
+    if [[ "$(uname -s)-$(uname -m)" == Darwin-arm64 ]]; then
+        if rustup target list --installed 2>/dev/null | grep -qx x86_64-apple-darwin; then
+            lint "rlx-cpu x86-64 int8-gemv,portable-gemm" -p rlx-cpu --target x86_64-apple-darwin --no-default-features --features int8-gemv,portable-gemm
+        else
+            skipped+=("rlx-cpu x86-64 (rustup target add x86_64-apple-darwin)")
+        fi
+    fi
     for f in cuda rocm; do
         if cargo check -p rlx-runtime --features "cpu,$f" --quiet 2>/dev/null; then
             lint "rlx-runtime cpu,$f" -p rlx-runtime --features "cpu,$f"
@@ -1088,3 +1102,10 @@ test-wgpu-portability: test-wgpu-webgpu build-wasm-webgpu test-wgpu-linux
 # (`Op::clone` included) where no runtime dispatch can rescue it.
 check-isa *ARGS:
     python3 crates/backends/rlx-cpu/tools/isa_portability.py {{ARGS}}
+
+# PS5 payloads (jailbroken console, ps5-payload-dev SDK). A standalone crate
+# with its own workspace and pinned nightly toolchain, never part of the
+# workspace build or `ci`. `just ps5 setup` · `just ps5 build` ·
+# `just ps5 run rlx --host <ps5-ip>`. See crates/backends/rlx-ps5/README.md.
+ps5 *ARGS:
+    python3 crates/backends/rlx-ps5/scripts/ps5.py {{ARGS}}

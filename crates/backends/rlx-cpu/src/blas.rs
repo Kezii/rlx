@@ -263,6 +263,16 @@ unsafe fn cblas_sgemm(
     let trans_a = transa != NO_TRANS;
     let trans_b = transb != NO_TRANS;
 
+    #[cfg(feature = "portable-gemm")]
+    if m >= PORTABLE_GEMM_MIN_M && n > 0 && k > 0 {
+        unsafe {
+            portable_gemm(
+                m, n, k, alpha, a, lda, trans_a, b, ldb, trans_b, beta, c, ldc,
+            )
+        };
+        return;
+    }
+
     // Fast path: the common NoTrans×NoTrans case, reordered i→p→j so the
     // inner j-loop is unit-stride in both B and C. The compiler
     // auto-vectorizes it (NEON / AVX) and it stays cache-resident — several×
@@ -314,11 +324,91 @@ unsafe fn cblas_sgemm(
                 acc += av * bv;
             }
             let cp = unsafe { c.add(i * ldc + j) };
+            // CBLAS: `beta == 0` means C is not read, so stale NaN/Inf in a
+            // reused arena slot must not leak through `0 * NaN`.
             unsafe {
-                *cp = alpha * acc + beta * *cp;
+                *cp = if beta == 0.0 {
+                    alpha * acc
+                } else {
+                    alpha * acc + beta * *cp
+                };
             }
         }
     }
+}
+
+/// Below this many rows the loop nest in `cblas_sgemm` beats the blocked
+/// kernel: a decode-shaped `m=1` product is a stream over B, and the `gemm`
+/// crate's packing costs more than it saves (33 vs 21 GF/s at m=1, k=1024,
+/// n=3072 on three AVX2 cores).
+#[cfg(all(not(rlx_cpu_blas), feature = "portable-gemm"))]
+const PORTABLE_GEMM_MIN_M: usize = 8;
+
+/// Row-major `C = alpha·op(A)·op(B) + beta·C` on the `gemm` crate, with the
+/// transposes expressed as strides. `gemm` computes `dst = α·dst + β·lhs·rhs`,
+/// so CBLAS `beta` becomes its `α` and CBLAS `alpha` its `β`; `beta == 0`
+/// skips reading `C`, matching CBLAS (stale NaNs in `C` are not propagated).
+/// Called from inside `par_sgemm`'s Rayon splits as well as directly, so it
+/// only spreads across the pool when it is not already on a pool thread.
+///
+/// # Safety
+/// Same contract as `cblas_sgemm`: the pointers cover the strided extents.
+#[cfg(all(not(rlx_cpu_blas), feature = "portable-gemm"))]
+#[allow(clippy::too_many_arguments)]
+unsafe fn portable_gemm(
+    m: usize,
+    n: usize,
+    k: usize,
+    alpha: f32,
+    a: *const f32,
+    lda: usize,
+    trans_a: bool,
+    b: *const f32,
+    ldb: usize,
+    trans_b: bool,
+    beta: f32,
+    c: *mut f32,
+    ldc: usize,
+) {
+    let (lhs_cs, lhs_rs) = if trans_a {
+        (lda as isize, 1)
+    } else {
+        (1, lda as isize)
+    };
+    let (rhs_cs, rhs_rs) = if trans_b {
+        (ldb as isize, 1)
+    } else {
+        (1, ldb as isize)
+    };
+    let workers = crate::pool::num_threads();
+    let par = if workers > 1 && rayon::current_thread_index().is_none() {
+        gemm::Parallelism::Rayon(workers)
+    } else {
+        gemm::Parallelism::None
+    };
+    unsafe {
+        gemm::gemm(
+            m,
+            n,
+            k,
+            c,
+            1,
+            ldc as isize,
+            beta != 0.0,
+            a,
+            lhs_cs,
+            lhs_rs,
+            b,
+            rhs_cs,
+            rhs_rs,
+            beta,
+            alpha,
+            false,
+            false,
+            false,
+            par,
+        )
+    };
 }
 
 #[cfg(not(rlx_cpu_blas))]
@@ -353,8 +443,13 @@ unsafe fn cblas_sgemv(
             acc += av * unsafe { *x.add(j) };
         }
         let yp = unsafe { y.add(i) };
+        // CBLAS: `beta == 0` means y is not read (see `cblas_sgemm`).
         unsafe {
-            *yp = alpha * acc + beta * *yp;
+            *yp = if beta == 0.0 {
+                alpha * acc
+            } else {
+                alpha * acc + beta * *yp
+            };
         }
     }
 }
@@ -651,8 +746,14 @@ unsafe fn cblas_dgemm(
                 acc += av * bv;
             }
             let cp = unsafe { c.add(i * ldc + j) };
+            // CBLAS: `beta == 0` means C is not read, so stale NaN/Inf in a
+            // reused arena slot must not leak through `0 * NaN`.
             unsafe {
-                *cp = alpha * acc + beta * *cp;
+                *cp = if beta == 0.0 {
+                    alpha * acc
+                } else {
+                    alpha * acc + beta * *cp
+                };
             }
         }
     }

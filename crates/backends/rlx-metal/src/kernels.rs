@@ -13752,6 +13752,8 @@ pub struct Kernels {
     /// Double-single (2× f32 ≈ f64) full-sum reduction — high-precision
     /// `Op::Reduce{Sum}` on Metal (opt-in via `RLX_METAL_DW_SUM`).
     pub dw_sum_arena: ComputePipelineState,
+    /// `Op::RoundToFormat` (precise-math library).
+    pub round_to_format: ComputePipelineState,
     pub topk_lastax: ComputePipelineState,
     pub grouped_matmul: ComputePipelineState,
     pub grouped_gemv_splitk: ComputePipelineState,
@@ -14048,6 +14050,82 @@ kernel void dw_sum_arena(device const float* x [[buffer(0)]],
 }
 "#;
 
+/// `Op::RoundToFormat`: round to a float format emulated on f32. Compiled with
+/// PRECISE math in its own library: the NaN/inf tests and the exponent work
+/// read the f32 bits, and `ldexp` / `rint` must not be relaxed. Bit-identical
+/// to `rlx_ir::FloatFormat::round_slice_scaled`.
+const ROUND_TO_FORMAT_MSL: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+struct RoundFmtParams {
+    uint n;          // elements
+    uint last_dim;   // row length (blocks never cross a row)
+    uint block;      // block length for mode 2
+    uint mode;       // 0 = no scale, 1 = per-tensor (amax buffer), 2 = per block
+    int man_bits;
+    int emin;        // smallest normal exponent of the format
+    int emax;        // exponent of max_normal
+    float max_normal;
+};
+
+inline int f32_exp(float a) { return int((as_type<uint>(a) >> 23) & 0xffu) - 127; }
+
+inline float round_fmt(float x, constant RoundFmtParams& p) {
+    uint bits = as_type<uint>(x);
+    uint ab = bits & 0x7fffffffu;
+    uint sign = bits & 0x80000000u;
+    if (ab == 0u || ab > 0x7f800000u) { return x; }          // +-0, NaN
+    if (ab < 0x00800000u) { return as_type<float>(sign); }   // f32 subnormal: flush
+    float ax = as_type<float>(ab);
+    if (ax >= p.max_normal) { return as_type<float>(sign | as_type<uint>(p.max_normal)); }
+    int ee = max(f32_exp(ax), p.emin);
+    int shift = p.man_bits - ee;
+    float q = ldexp(rint(ldexp(ax, shift)), -shift);
+    q = min(q, p.max_normal);
+    uint qb = as_type<uint>(q);
+    return as_type<float>(sign | (qb < 0x00800000u ? 0u : qb));
+}
+
+inline float flush(float y) {
+    uint b = as_type<uint>(y);
+    return (b & 0x7fffffffu) < 0x00800000u ? as_type<float>(b & 0x80000000u) : y;
+}
+
+// Exponent of the OCP MX power-of-two scale for a block maximum `amax`.
+inline int scale_exp(float amax, constant RoundFmtParams& p) {
+    uint b = as_type<uint>(amax);
+    if (amax == 0.0f || b >= 0x7f800000u) { return 0; }
+    return clamp(f32_exp(amax) - p.emax, -126, 127);
+}
+
+inline float round_scaled(float x, int e, constant RoundFmtParams& p) {
+    return flush(ldexp(round_fmt(ldexp(x, -e), p), e));
+}
+
+kernel void round_to_format(device const float* x    [[buffer(0)]],
+                            device float* out        [[buffer(1)]],
+                            device const float* amax [[buffer(2)]],
+                            constant RoundFmtParams& p [[buffer(3)]],
+                            uint gid [[thread_position_in_grid]]) {
+    if (p.mode == 2u) {
+        uint per_row = (p.last_dim + p.block - 1u) / p.block;
+        uint row = gid / per_row;
+        uint start = row * p.last_dim + (gid % per_row) * p.block;
+        if (start >= p.n) { return; }
+        uint end = min(start + p.block, row * p.last_dim + p.last_dim);
+        float m = 0.0f;
+        for (uint i = start; i < end; i++) { m = max(m, fabs(x[i])); }
+        int e = scale_exp(m, p);
+        for (uint i = start; i < end; i++) { out[i] = round_scaled(x[i], e, p); }
+        return;
+    }
+    if (gid >= p.n) { return; }
+    int e = p.mode == 1u ? scale_exp(amax[0], p) : 0;
+    out[gid] = round_scaled(x[gid], e, p);
+}
+"#;
+
 impl Kernels {
     fn new() -> Self {
         let dev = metal_device().expect("Metal device required");
@@ -14082,8 +14160,23 @@ impl Kernels {
                 .new_compute_pipeline_state_with_function(&f)
                 .expect("rlx-metal: dw_sum_arena pipeline")
         };
+        let round_to_format = {
+            let opts = crate::mtl::CompileOptions::new();
+            opts.set_fast_math_enabled(false);
+            let lib = dev
+                .device
+                .new_library_with_source(ROUND_TO_FORMAT_MSL, &opts)
+                .expect("rlx-metal: compile round_to_format library");
+            let f = lib
+                .get_function("round_to_format", None)
+                .expect("round_to_format");
+            dev.device
+                .new_compute_pipeline_state_with_function(&f)
+                .expect("rlx-metal: round_to_format pipeline")
+        };
         Self {
             dw_sum_arena,
+            round_to_format,
             sgemm: pipeline("sgemm"),
             sgemm_f16a: pipeline("sgemm_f16a"),
             sgemm_f16w: pipeline("sgemm_f16w"),

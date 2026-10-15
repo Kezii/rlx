@@ -2345,6 +2345,19 @@ pub enum Thunk {
         state_off: Option<usize>,
     },
 
+    /// `Op::RoundToFormat`: round to a float format emulated on f32, with an
+    /// optional power-of-two scale (see `rlx_ir::FloatFormat`). `amax` is the
+    /// scalar max-magnitude input of per-tensor scaling.
+    RoundToFormat {
+        x: usize,
+        out: usize,
+        len: u32,
+        last_dim: u32,
+        amax: Option<usize>,
+        format: rlx_ir::FloatFormat,
+        scaling: rlx_ir::FormatScaling,
+    },
+
     /// Backward pass for `Op::FakeQuantize` under one of four STE
     /// variants. Computes `dx[i]` from the f32 forward input `x` and
     /// the upstream gradient `dy`, using the same per-channel scale

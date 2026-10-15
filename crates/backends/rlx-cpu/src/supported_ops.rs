@@ -133,6 +133,7 @@ pub const SUPPORTED_OPS: &[rlx_ir::OpKind] = {
         ActivationBackward,
         FakeQuantize,
         FakeQuantizeBackward,
+        RoundToFormat,
         // LSQ (learned step size) QAT — native CPU thunks in thunk.rs.
         FakeQuantizeLSQ,
         FakeQuantizeLSQBackwardX,

@@ -15,7 +15,7 @@ pub use crate::blocks::{
 pub use crate::context::{DecodeBindings, FlowState};
 pub use crate::{
     BuiltModel, CompileProfile, Emit, FlowStage, FlowValue, LayerStack, ModelFlow, ModelRecipe,
-    SideOutputs, WeightSource,
+    SideOutputs, WeightSource, WeightSourceExt,
 };
 // Downstream extension seam: implement `LayerStage` for a custom block and drop
 // it into any flow via `ModelFlow::layer` — no core `FlowStage` variant needed.

@@ -53,6 +53,38 @@ impl BlockStage for LmHeadStage {
         } else {
             DType::F32
         };
+        // Opt-in packed head (`RLX_PACKED_LM_HEAD`): project through the
+        // checkpoint's quant blob with a fused `DequantMatMul` instead of an F32
+        // `[hidden, vocab]` copy — ~5x fewer bytes read per decoded token, and
+        // that copy is never built. Tied checkpoints use a separately stored
+        // `output.weight` when the file has one (as llama.cpp does), else the
+        // packed embedding table itself — available when no stage consumed it
+        // as F32 (a host-gathered embedding). Otherwise, or for a dense
+        // source, this falls through to the F32 head below.
+        if rlx_ir::env::flag("RLX_PACKED_LM_HEAD") {
+            let mut keys = vec![self.weight_key.as_deref().unwrap_or("lm_head.weight")];
+            if self.tie_word_embeddings && !ctx.params.contains_key("model.embed_tokens.weight") {
+                keys.push("model.embed_tokens.weight");
+            }
+            let found = keys
+                .into_iter()
+                .find_map(|key| match ctx.weights.take_packed(key) {
+                    Ok(Some(p)) => Some((key, p)),
+                    _ => None,
+                });
+            if let Some((key, packed)) = found {
+                if (packed.out_dim, packed.in_dim) != (self.vocab_size, self.hidden_size) {
+                    anyhow::bail!(
+                        "packed {key} is [{}, {}], expected [{}, {}]",
+                        packed.out_dim,
+                        packed.in_dim,
+                        self.vocab_size,
+                        self.hidden_size
+                    );
+                }
+                return Ok(Some(ctx.register_packed_linear(&input, key, packed)?));
+            }
+        }
         let lm_head_w = if self.tie_word_embeddings {
             let embed_key = "model.embed_tokens.weight";
             let vocab = self.vocab_size;

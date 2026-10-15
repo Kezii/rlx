@@ -14,7 +14,7 @@ unless noted.
 
 ```sh
 git submodule update --init rlx-mlx-sys/vendor/mlx
-sudo apt-get install build-essential cmake liblapacke-dev   # optional: ccache
+sudo apt-get install build-essential cmake liblapacke-dev   # optional: ccache (or sccache)
 cargo build -p rlx-mlx
 ```
 
@@ -41,7 +41,8 @@ cargo build -p rlx-mlx --features mlx-cuda   # via rlx-runtime / rlx crate
 
 Requirements: `cuda-compiler-12-*`, `libcudnn9-dev-cuda-12`, `liblapacke-dev`.
 
-Tips: install `ccache`; use `cargo build` (debug) on Linux so CMake uses
+Tips: install `sccache` or `ccache` (picked up automatically; `RLX_MLX_CCACHE`
+chooses); use `cargo build` (debug) on Linux so CMake uses
 `Debug` for nvcc; pin arch with `RLX_MLX_CUDA_ARCH=89` (Ada/4090).
 
 See also [`rlx-mlx-sys/README.md`](../../crates/backends/rlx-mlx-sys/README.md).

@@ -913,6 +913,72 @@ unsafe fn softmax_rows_avx2(data: &mut [f32], rows: usize, cols: usize) {
     }
 }
 
+/// [`softmax_rows_avx2`] on one masked row, visiting only the 8-wide chunks
+/// listed in `live` (ascending) plus the scalar tail. The chunks left out must
+/// hold only masked scores, whose exponentials (≈1e-38, the `avx2_exp8`
+/// floor) vanish against a sum ≥ 1, so the live entries come out as the full
+/// row's; the skipped entries are left unnormalized and must not be read.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+#[allow(unsafe_op_in_unsafe_fn)]
+pub(crate) unsafe fn softmax_row_avx2_chunks(row: &mut [f32], live: &[usize]) {
+    use std::arch::x86_64::*;
+    let cols = row.len();
+    let chunks = cols / 8;
+    let row = row.as_mut_ptr();
+    let mut vmax = _mm256_set1_ps(f32::NEG_INFINITY);
+    for &c in live {
+        vmax = _mm256_max_ps(vmax, _mm256_loadu_ps(row.add(c * 8)));
+    }
+    let mut max_v = {
+        let lo = _mm256_castps256_ps128(vmax);
+        let hi = _mm256_extractf128_ps::<1>(vmax);
+        let s4 = _mm_max_ps(lo, hi);
+        let s2 = _mm_max_ps(s4, _mm_movehl_ps(s4, s4));
+        let s1 = _mm_max_ss(s2, _mm_shuffle_ps::<0x55>(s2, s2));
+        _mm_cvtss_f32(s1)
+    };
+    for i in (chunks * 8)..cols {
+        let v = *row.add(i);
+        if v > max_v {
+            max_v = v;
+        }
+    }
+    let vmax = _mm256_set1_ps(max_v);
+    let mut vsum = _mm256_setzero_ps();
+    for &c in live {
+        let off = c * 8;
+        let e = avx2_exp8(_mm256_sub_ps(_mm256_loadu_ps(row.add(off)), vmax));
+        _mm256_storeu_ps(row.add(off), e);
+        vsum = _mm256_add_ps(vsum, e);
+    }
+    let mut sum_v = {
+        let lo = _mm256_castps256_ps128(vsum);
+        let hi = _mm256_extractf128_ps::<1>(vsum);
+        let s4 = _mm_add_ps(lo, hi);
+        let s2 = _mm_add_ps(s4, _mm_movehl_ps(s4, s4));
+        let s1 = _mm_add_ss(s2, _mm_shuffle_ps::<0x55>(s2, s2));
+        _mm_cvtss_f32(s1)
+    };
+    for i in (chunks * 8)..cols {
+        let v = (*row.add(i) - max_v).exp();
+        *row.add(i) = v;
+        sum_v += v;
+    }
+    let vinv = _mm256_set1_ps(1.0 / sum_v);
+    for &c in live {
+        let off = c * 8;
+        _mm256_storeu_ps(
+            row.add(off),
+            _mm256_mul_ps(_mm256_loadu_ps(row.add(off)), vinv),
+        );
+    }
+    let inv_sum = 1.0 / sum_v;
+    for i in (chunks * 8)..cols {
+        *row.add(i) *= inv_sum;
+    }
+}
+
 #[cfg(target_arch = "x86_64")]
 pub fn neon_softmax(data: &mut [f32], rows: usize, cols: usize) {
     let avx2 =

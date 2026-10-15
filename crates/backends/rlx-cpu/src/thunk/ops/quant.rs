@@ -3535,3 +3535,64 @@ mod amx_matmul_bench {
         println!();
     }
 }
+
+/// `Op::RoundToFormat`. Delegates every element to `rlx_ir::FloatFormat`, so
+/// this kernel *is* the reference the other backends are checked against.
+pub(crate) fn exec_round_to_format(t: &Thunk, base: *mut u8) {
+    let Thunk::RoundToFormat {
+        x,
+        out,
+        len,
+        last_dim,
+        amax,
+        format,
+        scaling,
+    } = t
+    else {
+        unreachable!()
+    };
+    use rlx_ir::FormatScaling;
+    let len = *len as usize;
+    let (x, out, fmt) = (*x, *out, *format);
+    let base_addr = base as usize;
+    match *scaling {
+        FormatScaling::None | FormatScaling::PerTensor => {
+            let scale = match (*scaling, amax) {
+                (FormatScaling::PerTensor, Some(a)) => {
+                    let amax = unsafe { sl(*a, base, 1) }[0];
+                    fmt.pow2_scale(amax)
+                }
+                _ => 1.0,
+            };
+            // `par_for` hands each worker `(offset, count)`.
+            crate::pool::par_for(len, 1 << 14, &|start, count| {
+                let base = base_addr as *mut u8;
+                let (xs, outs) = unsafe { (sl(x, base, len), sl_mut(out, base, len)) };
+                for i in start..start + count {
+                    outs[i] = fmt.round_scaled(xs[i], scale);
+                }
+            });
+        }
+        FormatScaling::Block(n) => {
+            let n = n as usize;
+            let row = (*last_dim as usize).max(1);
+            crate::pool::par_for(len / row, (1 << 14) / row + 1, &|r0, rows| {
+                let base = base_addr as *mut u8;
+                let (xs, outs) = unsafe { (sl(x, base, len), sl_mut(out, base, len)) };
+                for r in r0..r0 + rows {
+                    let mut b0 = r * row;
+                    let row_end = b0 + row;
+                    while b0 < row_end {
+                        let b1 = (b0 + n).min(row_end);
+                        let amax = xs[b0..b1].iter().fold(0f32, |a, v| a.max(v.abs()));
+                        let s = fmt.pow2_scale(amax);
+                        for i in b0..b1 {
+                            outs[i] = fmt.round_scaled(xs[i], s);
+                        }
+                        b0 = b1;
+                    }
+                }
+            });
+        }
+    }
+}

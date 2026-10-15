@@ -64,6 +64,10 @@ pub fn sample(kind: OpKind) -> Op {
             ste: SteKind::Identity,
             scale_mode: ScaleMode::PerBatch,
         },
+        OpKind::RoundToFormat => Op::RoundToFormat {
+            format: crate::number_format::FloatFormat::F16,
+            scaling: crate::number_format::FormatScaling::None,
+        },
         OpKind::FakeQuantizeLSQ => Op::FakeQuantizeLSQ {
             bits: 1,
             axis: None,
@@ -712,6 +716,7 @@ pub const ALL_KINDS: &[OpKind] = &[
     OpKind::FakeQuantizeLSQ,
     OpKind::FakeQuantizeLSQBackwardX,
     OpKind::FakeQuantizeLSQBackwardScale,
+    OpKind::RoundToFormat,
     OpKind::Binary,
     OpKind::Compare,
     OpKind::Where,
@@ -944,6 +949,10 @@ pub fn variants(kind: OpKind) -> Vec<Op> {
         }
         Op::FakeQuantize { scale_mode, .. } => {
             *scale_mode = ScaleMode::Fixed;
+            true
+        }
+        Op::RoundToFormat { scaling, .. } => {
+            *scaling = crate::number_format::FormatScaling::Block(32);
             true
         }
         Op::DequantMatMul { scheme } => {

@@ -2,38 +2,44 @@
 // Copyright (C) 2026 Eugene Hauptmann, Nataliya Kosmyna.
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! PLAN: Schedule splitting for the Metal MPSGraph path.
+//! SUPERSEDED — see [`crate::mps_graph_hybrid`], which ships this design.
+//!
+//! This file was the PLAN for schedule splitting on the Metal MPSGraph path:
+//! split the topological schedule at attention boundaries so each contiguous
+//! run of MPSGraph-compatible ops becomes one compiled sub-graph and each
+//! attention node stays on the parity-correct thunk path. That plan was then
+//! implemented in `mps_graph_hybrid.rs` (`build_hybrid_plan` / `HybridStep`),
+//! which also does the executor half this file lists as "next": boundary
+//! placeholder binding, arena write-back, and interleaved dispatch. It is wired
+//! into `backend/compile.rs` and `backend/run.rs` and is ON by default.
+//!
+//! Nothing references this module. It is kept only because its segmenter is a
+//! readable statement of the idea — but its status note ("scaffolding only …
+//! the full executor wiring is the next chunk of work") is STALE and actively
+//! misleading: read as a to-do list it sends you to rebuild a shipped feature.
+//! That happened. Treat `mps_graph_hybrid` as the implementation.
+//!
+//! Why the hybrid does not fire on a Qwen3.5-class decode graph, which is the
+//! question the dispatch-count numbers below invite: `build_hybrid_plan`
+//! returns `None` for any graph containing `Op::GatedDeltaNet`, `Op::Attention`
+//! or `Op::Lstm`, because the MPSGraph→native boundary handoff miscompiles a
+//! segment that feeds MULTIPLE boundary outputs into one native op (confirmed
+//! finite-but-wrong at real dims). A hybrid-decode win therefore depends on
+//! fixing that handoff, NOT on writing an executor. See the comment at the top
+//! of `build_hybrid_plan`, including the reverted narrowing attempt and its
+//! warning to re-measure on a quiet machine.
+//!
+//! ── original plan, for reference ──────────────────────────────────────────
 //!
 //! Background: today's Metal backend is all-or-nothing — either every op
 //! lowers to MPSGraph (one big compile, one dispatch) or every op runs
-//! as a thunk (N dispatches, ~50µs overhead each). The MPSGraph path
-//! gives a 1.4-2.2× speedup at large batches BUT breaks parity on
-//! transformer attention because MPSGraph's optimizer mishandles
-//! slice-views of computed tensors (see
-//! `tests/mps_attention_parity.rs::bisect_full_qkv_to_attention`).
-//!
-//! Schedule splitting is the structural workaround: split the topological
-//! schedule at attention boundaries. Each contiguous run of
-//! MPSGraph-compatible ops becomes one `MpsGraphSegment` (a sub-graph
-//! compiled to MPSGraph with arena-bound input/output buffers); each
-//! attention node stays as a `ThunkRange` (handled by the existing,
-//! parity-correct thunk path). At run-time the executor walks the
-//! segment list in order, mixing MPSGraph dispatches with thunk
-//! dispatches.
+//! as a thunk (N dispatches, ~50µs overhead each).
 //!
 //! For a 6-layer BERT (the bench workload):
 //! - All-thunks: 65 dispatches, ~3.25ms launch overhead floor
-//! - Schedule-split: ~7 MPSGraph segments + 6 attention thunks = 13
-//!   dispatches, ~0.65ms launch overhead — 5× reduction
-//! - All-MPSGraph (if the bug were fixed): ~1 dispatch, ~0.05ms
-//!
-//! So splitting unlocks roughly 30% of the full MPSGraph win — a
-//! meaningful step even before the underlying MPSGraph bug is fixed.
-//!
-//! Status: scaffolding only. The data model + segmenter are defined
-//! here; the full executor wiring (reading boundary buffers from the
-//! arena, dispatching segments mixed with thunks) is the next chunk
-//! of work.
+//! - Schedule-split: ~13 dispatches, ~0.65ms — 5× reduction
+
+#![allow(dead_code)]
 
 use rlx_ir::{Graph, NodeId, Op};
 use std::collections::{HashMap, HashSet};

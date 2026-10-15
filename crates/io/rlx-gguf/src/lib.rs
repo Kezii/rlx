@@ -54,7 +54,8 @@
 //! scheme rules see the companion [`rlx-gguf-convert`] crate.
 //!
 //! Map GGUF dtypes to RLX `QuantScheme` for `Op::DequantMatMul`:
-//! `rlx_cpu::quant_scheme_for_ggml` (requires `rlx-cpu`).
+//! `quant_scheme` (feature `ir`), also re-exported by rlx-cpu as
+//! `rlx_cpu::quant_scheme_for_ggml`.
 //!
 //! [`rlx-gguf-convert`]: https://docs.rs/rlx-gguf-convert
 
@@ -83,10 +84,14 @@ pub mod ptq1_dequant;
 pub mod q1_dequant;
 pub mod q2_dequant;
 pub mod quantize;
+#[cfg(feature = "ir")]
+mod scheme;
 pub mod tq_dequant;
 pub mod tq_quantize;
 pub mod writer;
 pub use quantize::quantize;
+#[cfg(feature = "ir")]
+pub use scheme::quant_scheme;
 pub use writer::{GgufWriter, TensorPayload};
 
 pub const GGUF_MAGIC: u32 = 0x4655_4747; // "GGUF" little-endian

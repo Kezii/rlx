@@ -1097,6 +1097,18 @@ pub enum Thunk {
         len: u32,
         op: u32,
     },
+    /// Native MSL `Op::RoundToFormat`. `amax` is the per-tensor max-magnitude
+    /// input (mode 1); `mode`: 0 none, 1 per-tensor, 2 per block.
+    RoundToFormat {
+        src: usize,
+        amax: Option<usize>,
+        dst: usize,
+        n: u32,
+        last_dim: u32,
+        block: u32,
+        mode: u32,
+        format: rlx_ir::FloatFormat,
+    },
     /// Native MSL `Op::FakeQuantize` Fixed (scale input).
     FakeQuantizeFixed {
         src: usize,
@@ -2481,6 +2493,7 @@ pub fn thunk_name(t: &Thunk) -> &'static str {
         Thunk::Fma { .. } => "fma",
         Thunk::ReluBackward { .. } => "relu_backward",
         Thunk::ActivationBackward { .. } => "activation_backward",
+        Thunk::RoundToFormat { .. } => "round_to_format",
         Thunk::FakeQuantizeFixed { .. } => "fake_quantize_fixed",
         Thunk::FakeQuantizePerBatch { .. } => "fake_quantize_perbatch",
         Thunk::ComplexNormSq { .. } => "complex_norm_sq",
@@ -3185,6 +3198,11 @@ fn mlp_io(t: &Thunk) -> Option<(Vec<usize>, Vec<usize>)> {
             src, scale, dst, ..
         } => (vec![*src, *scale], vec![*dst]),
         FakeQuantizePerBatch { src, dst, .. } => (vec![*src], vec![*dst]),
+        RoundToFormat { src, amax, dst, .. } => {
+            let mut r = vec![*src];
+            r.extend(amax.iter().copied());
+            (r, vec![*dst])
+        }
         ComplexNormSq { src, dst, .. } | ConjugateC64 { src, dst, .. } => (vec![*src], vec![*dst]),
         ComplexNormSqBackward { z, g, dz, .. } => (vec![*z, *g], vec![*dz]),
         FftButterflyStage {

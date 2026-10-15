@@ -1,0 +1,39 @@
+[package]
+name = "rlx-ps5"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "PS5 (jailbroken, ps5-payload-dev SDK) target bring-up for RLX — stable-Rust probe payload"
+license = "MIT OR Apache-2.0"
+
+# Standalone: cross-built for x86_64-unknown-freebsd through the PS5 SDK's
+# linker, so it stays out of the host workspace build.
+[workspace]
+
+[[bin]]
+name = "ps5-probe"
+path = "src/probe.rs"
+
+[[bin]]
+name = "ps5-rlx"
+path = "src/rlx_check.rs"
+
+[[bin]]
+name = "ps5-node"
+path = "src/node.rs"
+
+[dependencies]
+libc = "0.2"
+# CPU only: no BLAS is linked for this cross target (rlx-cpu's build.rs only
+# probes a system OpenBLAS on native builds).
+rlx-ir = { path = "../../core/rlx-ir" }
+rlx-runtime = { path = "../../core/rlx-runtime", default-features = false, features = ["cpu"] }
+# The console links no BLAS: put the GEMM fallback on the `gemm` crate's
+# blocked AVX2/FMA kernels (8× on prefill GEMMs, ~36× on attention QKᵀ
+# on three AVX2 cores vs the loop nest).
+# `int8-gemv`: int8 decode GEMVs for the non-Q4_K GGUF formats (Q6_K is the
+# LM head and ~1/3 of a Q4_K_M checkpoint).
+rlx-cpu = { path = "../rlx-cpu", features = ["portable-gemm", "int8-gemv"] }
+
+[profile.release]
+debug = 1

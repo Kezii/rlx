@@ -48,19 +48,9 @@ impl BlockStage for GatherLastTokenStage {
             // Declaring this F32 produced garbage logits (stable wrong
             // token streams like "< as as as…").
             let idx = ctx.input(&self.input_name, Shape::new(&[self.batch], DType::I32));
-            let hidden = input.shape.dim(2).unwrap_static();
             let mut gb = HirMut::new(ctx.hir());
             let idx_2d = gb.reshape_(idx, vec![self.batch as i64, 1]);
-            let gathered = gb.gather_(input.id, idx_2d, 1);
-            // ONNX `Gather` splices the index's own shape into the output, so a
-            // rank-2 index on a rank-3 input yields rank 4:
-            // `[batch, 1, 1, hidden]`. The declared `out_shape` below is rank 3,
-            // and a backend that sizes its write from the declared shape then
-            // fills only a fraction of the buffer — on MLX this returned logits
-            // that were partly or entirely zero, silently, for every model
-            // using the dynamic last-token gather. Squeeze the spurious unit
-            // axis so the node's real shape is the one it advertises.
-            gb.reshape_(gathered, vec![self.batch as i64, 1, hidden as i64])
+            gather_rows_axis1(&mut gb, input.id, idx_2d, self.batch)
         };
         let out_shape = if input.shape.rank() >= 2 {
             let batch = input.shape.dim(0).unwrap_static();
@@ -71,4 +61,40 @@ impl BlockStage for GatherLastTokenStage {
         };
         Ok(Some(ctx.wrap(id, out_shape)))
     }
+}
+
+/// Row `b` of `x` (`[batch, seq, c]`) at positions `idx[b]` (`[batch, k]`),
+/// as `[batch, k, c]` — `take_along_axis` on axis 1.
+///
+/// ONNX `Gather` splices the whole index shape into its output, so
+/// `gather(x, idx, 1)` is `[batch, batch, k, c]`: every row at every row's
+/// positions. The answer is its `[b, b]` diagonal. At batch 1 that is a
+/// reshape; above it a plain reshape does not even keep the element count.
+/// The result is truly rank 3 because downstream nodes declare it so, and a
+/// backend that sizes its write from the declared rank fills only part of a
+/// rank-4 buffer (on MLX: silently zero logits whenever the gathered position
+/// was not 0).
+pub fn gather_rows_axis1(
+    gb: &mut HirMut,
+    x: rlx_ir::HirNodeId,
+    idx: rlx_ir::HirNodeId,
+    batch: usize,
+) -> rlx_ir::HirNodeId {
+    let c = {
+        let sh = gb.shape(x);
+        sh.dim(sh.rank() - 1).unwrap_static()
+    };
+    let k = gb.shape(idx).dim(1).unwrap_static();
+    let w = gb.gather_(x, idx, 1);
+    if batch == 1 {
+        return gb.reshape_(w, vec![1, k as i64, c as i64]);
+    }
+    let rows: Vec<rlx_ir::HirNodeId> = (0..batch)
+        .map(|b| {
+            let row = gb.narrow_(w, 0, b, 1);
+            let diag = gb.narrow_(row, 1, b, 1);
+            gb.reshape_(diag, vec![1, k as i64, c as i64])
+        })
+        .collect();
+    gb.concat_(rows, 0)
 }

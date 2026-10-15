@@ -1,0 +1,65 @@
+diff --git a/mlx/backend/cuda/CMakeLists.txt b/mlx/backend/cuda/CMakeLists.txt
+index 50be6f40..deb07236 100644
+--- a/mlx/backend/cuda/CMakeLists.txt
++++ b/mlx/backend/cuda/CMakeLists.txt
+@@ -274,6 +274,19 @@ install(DIRECTORY ${cccl_SOURCE_DIR}/include/nv
+ if(MLX_BUILD_TESTS)
+   target_compile_definitions(mlx_dirs
+                              PRIVATE MLX_CCCL_DIR="${cccl_SOURCE_DIR}/include")
++else()
++  # A static libmlx linked into an executable outside the install tree does
++  # not find `<binary>/../include/cccl` either: point the JIT at the install.
++  target_compile_definitions(
++    mlx_dirs
++    PRIVATE
++      MLX_CCCL_DIR="${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/cccl")
++endif()
++# The toolkit the build used, as the JIT's default header root (CUDA_HOME /
++# CUDA_PATH still win) instead of a hard-coded /usr/local/cuda.
++if(MLX_CUDA_TOOLKIT_DIR)
++  target_compile_definitions(
++    mlx_dirs PRIVATE MLX_CUDA_TOOLKIT_DIR="${MLX_CUDA_TOOLKIT_DIR}")
+ endif()
+ 
+ # Use fixed version of NVTX.
+diff --git a/mlx/backend/cuda/dirs.cpp b/mlx/backend/cuda/dirs.cpp
+index bd24853d..cac1b3fa 100644
+--- a/mlx/backend/cuda/dirs.cpp
++++ b/mlx/backend/cuda/dirs.cpp
+@@ -28,6 +28,14 @@ const char* cccl_dir() {
+ #endif
+ }
+ 
++const char* cuda_toolkit_dir() {
++#if defined(MLX_CUDA_TOOLKIT_DIR)
++  return MLX_CUDA_TOOLKIT_DIR;
++#else
++  return nullptr;
++#endif
++}
++
+ const char* cuda_bin_dir() {
+ #if defined(MLX_CUDA_BIN_DIR)
+   static const std::string dir = resolve_bin_dir(MLX_CUDA_BIN_DIR);
+diff --git a/mlx/backend/cuda/jit_module.cpp b/mlx/backend/cuda/jit_module.cpp
+index 0d107a8e..05974e62 100644
+--- a/mlx/backend/cuda/jit_module.cpp
++++ b/mlx/backend/cuda/jit_module.cpp
+@@ -18,6 +18,7 @@ namespace mlx::core::cu {
+ 
+ // Defined in dirs.cpp to avoid invalidating compile cache.
+ const char* cccl_dir();
++const char* cuda_toolkit_dir();
+ 
+ namespace {
+ 
+@@ -44,7 +45,8 @@ const std::filesystem::path& default_cuda_toolkit_path() {
+     return {};
+   }();
+ #else
+-  static std::filesystem::path cached_path = "/usr/local/cuda";
++  static std::filesystem::path cached_path =
++      cuda_toolkit_dir() ? cuda_toolkit_dir() : "/usr/local/cuda";
+ #endif
+   return cached_path;
+ }

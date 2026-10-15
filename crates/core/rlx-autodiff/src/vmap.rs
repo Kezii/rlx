@@ -812,6 +812,25 @@ fn vmap_op(
                 batched_shape(),
             )
         }
+        // Elementwise along the last axis, which batching does not touch. A
+        // per-tensor scale is then shared across the whole batch.
+        Op::RoundToFormat { format, scaling } => {
+            let lifted: Vec<NodeId> = new_inputs
+                .iter()
+                .map(|&id| lift_to_batched(out, id, batched, batch_size))
+                .collect();
+            for &id in &lifted {
+                batched.insert(id);
+            }
+            out.add_node(
+                Op::RoundToFormat {
+                    format: *format,
+                    scaling: *scaling,
+                },
+                lifted,
+                batched_shape(),
+            )
+        }
         Op::FakeQuantizeBackward { bits, axis, ste } => {
             let lifted: Vec<NodeId> = new_inputs
                 .iter()

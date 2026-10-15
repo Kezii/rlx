@@ -1043,6 +1043,12 @@ fn vjp(
             vec![(0, upstream)]
         }
 
+        // Straight-through: rounding to a number format is the identity for
+        // the gradient; the per-tensor scale input (a max magnitude) is detached.
+        Op::RoundToFormat { .. } => vec![(0, upstream)],
+        // Straight-through, mirroring `ScaledQuantize`: the codes receive the
+        // reconstructed value's cotangent; the scale is detached.
+        Op::ScaledDequantize { .. } => vec![(0, upstream)],
         Op::FakeQuantizeLSQ { bits, axis } => {
             vjp_fake_quantize_l_s_q(node, upstream, upstream_shape, fwd_map, bwd)
         }

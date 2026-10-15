@@ -18,6 +18,9 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "build_cuda.rs"]
+mod build_cuda;
+
 const OPENBLAS_VERSION: &str = "0.3.31";
 
 /// An Apple platform other than macOS that MLX can target: cross-compiled,
@@ -241,11 +244,16 @@ fn main() {
     }
 
     // Stage 1: configure + build MLX into OUT_DIR.
-    let build_cuda = linux_build_cuda(&target_os);
+    let cuda = linux_build_cuda(&target_os, &mlx_src, &out_dir);
     let cmake_build_type = cmake_build_type_for_cargo_profile();
     println!("cargo:rerun-if-env-changed=RLX_MLX_CUDA");
     println!("cargo:rerun-if-env-changed=RLX_MLX_CUDA_ARCH");
+    for var in build_cuda::ENV_VARS {
+        println!("cargo:rerun-if-env-changed={var}");
+    }
     println!("cargo:rerun-if-env-changed=RLX_MLX_JOBS");
+    println!("cargo:rerun-if-env-changed=RLX_MLX_CCACHE");
+    println!("cargo:rerun-if-env-changed=RLX_MLX_NO_CCACHE");
 
     let mut mlx_cfg = cmake::Config::new(&mlx_src);
     mlx_cfg
@@ -307,14 +315,16 @@ fn main() {
         deploy
     });
 
-    let use_ccache = (is_macos || apple_embedded.is_some())
-        && env_flag("RLX_MLX_NO_CCACHE") != Some(true)
-        && Command::new("ccache")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-    mlx_cfg.define("MLX_USE_CCACHE", if use_ccache { "ON" } else { "OFF" });
+    // MLX's own lookup knows only ccache; set the launcher ourselves so
+    // sccache works too, and keep MLX's lookup off so it cannot replace it.
+    mlx_cfg.define("MLX_USE_CCACHE", "OFF");
+    if target_os != "windows" {
+        if let Some(launcher) = compiler_launcher() {
+            for lang in ["C", "CXX", "CUDA"] {
+                mlx_cfg.define(format!("CMAKE_{lang}_COMPILER_LAUNCHER"), &launcher);
+            }
+        }
+    }
 
     apply_cmake_parallelism(&mut mlx_cfg);
 
@@ -332,28 +342,43 @@ fn main() {
         });
         apply_lapack_hints(&mut mlx_cfg, &lapack);
 
-        if build_cuda {
-            eprintln!(
-                "cargo:warning=rlx-mlx-sys: building MLX CUDA backend ({cmake_build_type}); \
-                 first compile can take ~1h — use ccache + keep RLX_MLX_CUDA=1 stable"
+        if let Some(tk) = &cuda {
+            println!(
+                "cargo:warning=rlx-mlx-sys: building MLX CUDA backend ({cmake_build_type}) with \
+                 {}; first compile can take ~1h — install sccache or ccache + keep RLX_MLX_CUDA=1 stable",
+                tk.describe()
             );
             mlx_cfg.define("MLX_BUILD_CUDA", "ON");
             if let Some(arch) = env::var("RLX_MLX_CUDA_ARCH").ok().filter(|s| !s.is_empty()) {
                 mlx_cfg.define("MLX_CUDA_ARCHITECTURES", arch);
             }
-            if let Some(cuda_root) = probe_linux_cuda_toolkit() {
-                let root = cuda_root.to_string_lossy();
-                mlx_cfg.define("CUDAToolkit_ROOT", root.as_ref());
-                let bin = cuda_root.join("bin");
-                if bin.is_dir() {
-                    let path = env::var("PATH").unwrap_or_default();
-                    mlx_cfg.env("PATH", format!("{}:{}", bin.display(), path));
-                }
+            let path_str = |p: &Path| p.to_string_lossy().into_owned();
+            // Pin everything to the chosen toolkit: CMake otherwise takes the
+            // first `nvcc` it finds, and a distro toolkit beside
+            // /usr/local/cuda puts its own on PATH.
+            mlx_cfg.define("CUDAToolkit_ROOT", path_str(&tk.root));
+            mlx_cfg.define("CMAKE_CUDA_COMPILER", path_str(&tk.nvcc));
+            if let Some(host) = &tk.host_cxx {
+                mlx_cfg.define("CMAKE_CUDA_HOST_COMPILER", path_str(host));
             }
-        } else if probe_linux_cuda_toolkit().is_some() && probe_linux_cudnn().is_some() {
-            eprintln!(
-                "cargo:warning=rlx-mlx-sys: CUDA+cuDNN found but MLX CUDA backend skipped \
-                 (CPU-only default). Set RLX_MLX_CUDA=1 or enable rlx-mlx-sys/cuda for GPU."
+            mlx_cfg.define("CUDNN_INCLUDE_PATH", path_str(&tk.cudnn_include));
+            if let Some(lib) = &tk.cudnn_lib {
+                mlx_cfg.define("CUDNN_LIBRARY_PATH", path_str(lib));
+            }
+            // The JIT's default header root at run time (patch 0003);
+            // CUDA_HOME / CUDA_PATH still override it.
+            mlx_cfg.define("MLX_CUDA_TOOLKIT_DIR", path_str(&tk.root));
+            let bin = tk.nvcc.parent().unwrap_or(&tk.root).to_path_buf();
+            let path = env::var("PATH").unwrap_or_default();
+            mlx_cfg.env("PATH", format!("{}:{}", bin.display(), path));
+        } else if !cuda_requested()
+            && (Path::new("/usr/local/cuda/bin/nvcc").exists()
+                || Path::new("/usr/lib/nvidia-cuda-toolkit/bin/nvcc").exists())
+        {
+            println!(
+                "cargo:warning=rlx-mlx-sys: a CUDA toolkit is installed but the MLX CUDA \
+                 backend is not built (CPU-only default). Set RLX_MLX_CUDA=1 or enable \
+                 rlx-mlx-sys/cuda for GPU."
             );
         }
     }
@@ -447,10 +472,9 @@ fn main() {
         println!("cargo:rustc-link-lib=stdc++");
         println!("cargo:rustc-link-lib=dl");
         println!("cargo:rustc-link-lib=pthread");
-        if build_cuda {
-            if let Some(cuda_root) = probe_linux_cuda_toolkit() {
-                link_linux_cuda_libs(&cuda_root);
-            }
+        if let Some(tk) = &cuda {
+            link_linux_cuda_libs(tk);
+            link_mlx_nccl(&mlx_build.join("build").join("CMakeCache.txt"));
         }
     } else if target_os == "windows" {
         link_windows_mlx_deps(&out_dir);
@@ -633,7 +657,7 @@ fn link_apple_clang_rt(variant: &str) {
     {
         Ok(o) if o.status.success() => o,
         _ => {
-            eprintln!(
+            println!(
                 "cargo:warning=rlx-mlx-sys: could not run `clang --print-file-name={libname}`"
             );
             return;
@@ -641,12 +665,12 @@ fn link_apple_clang_rt(variant: &str) {
     };
     let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if path.is_empty() || path == libname {
-        eprintln!("cargo:warning=rlx-mlx-sys: clang did not resolve {libname}");
+        println!("cargo:warning=rlx-mlx-sys: clang did not resolve {libname}");
         return;
     }
     let path = PathBuf::from(path);
     if !path.is_file() {
-        eprintln!(
+        println!(
             "cargo:warning=rlx-mlx-sys: {libname} not found at {}",
             path.display()
         );
@@ -667,17 +691,36 @@ fn link_apple_clang_rt(variant: &str) {
     }
 }
 
-fn linux_build_cuda(target_os: &str) -> bool {
-    if target_os != "linux" {
-        return false;
+/// The toolkit for MLX's CUDA backend, when one is asked for
+/// (`RLX_MLX_CUDA=1` or feature `cuda`) on Linux and a usable one exists.
+fn linux_build_cuda(
+    target_os: &str,
+    mlx_src: &Path,
+    out_dir: &Path,
+) -> Option<build_cuda::CudaToolkit> {
+    if target_os != "linux" || !cuda_requested() {
+        return None;
     }
+    // Asked for CUDA: say what is wrong rather than quietly building the
+    // CPU-only MLX, whose tests then pass for a GPU run that never happened.
+    match build_cuda::select(mlx_src, out_dir) {
+        Ok(tk) => Some(tk),
+        Err(why) => {
+            println!(
+                "cargo:warning=rlx-mlx-sys: MLX CUDA requested (RLX_MLX_CUDA / feature \
+                 `cuda`) but {why} — building the CPU-only MLX backend"
+            );
+            None
+        }
+    }
+}
+
+/// `RLX_MLX_CUDA=1`, or the `cuda` feature unless `RLX_MLX_CUDA=0`.
+fn cuda_requested() -> bool {
     match env_flag("RLX_MLX_CUDA") {
-        Some(false) => return false,
-        Some(true) => {}
-        None if env::var("CARGO_FEATURE_CUDA").is_ok() => {}
-        None => return false,
+        Some(on) => on,
+        None => env::var("CARGO_FEATURE_CUDA").is_ok(),
     }
-    probe_linux_cuda_toolkit().is_some() && probe_linux_cudnn().is_some()
 }
 
 /// Match Cargo profile on Linux so `cargo build` (debug) skips `-O3` nvcc compiles.
@@ -703,6 +746,45 @@ fn apply_cmake_parallelism(cfg: &mut cmake::Config) {
     }
 }
 
+/// The compiler cache for MLX's C++/CUDA sources: `RLX_MLX_CCACHE`
+/// (`sccache`, `ccache`, a path, or `off`), else sccache, else ccache — the
+/// first one that runs. Not used on Windows: the Visual Studio generator the
+/// `cmake` crate picks there ignores compiler launchers.
+fn compiler_launcher() -> Option<String> {
+    let runs = |exe: &str| {
+        Command::new(exe)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    };
+    if env_flag("RLX_MLX_NO_CCACHE") == Some(true) {
+        return None;
+    }
+    match env::var("RLX_MLX_CCACHE")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
+        Some(_) if env_flag("RLX_MLX_CCACHE") == Some(false) => None,
+        Some(v) => {
+            let v = v.trim().to_string();
+            if runs(&v) {
+                Some(v)
+            } else {
+                println!(
+                    "cargo:warning=rlx-mlx-sys: RLX_MLX_CCACHE={v} does not run; \
+                     building MLX without a compiler cache"
+                );
+                None
+            }
+        }
+        None => ["sccache", "ccache"]
+            .into_iter()
+            .find(|exe| runs(exe))
+            .map(str::to_string),
+    }
+}
+
 fn env_flag(name: &str) -> Option<bool> {
     let v = env::var(name).ok()?;
     match v.trim().to_ascii_lowercase().as_str() {
@@ -712,44 +794,21 @@ fn env_flag(name: &str) -> Option<bool> {
     }
 }
 
-fn probe_linux_cuda_toolkit() -> Option<PathBuf> {
-    for root in [
-        "/usr/local/cuda",
-        "/usr/local/cuda-12",
-        "/usr/local/cuda-12.6",
-    ] {
-        let path = PathBuf::from(root);
-        let lib64 = path.join("lib64");
-        if lib64.join("libcudart.so").exists() || lib64.join("libcudart.so.12").exists() {
-            return Some(path);
+fn link_linux_cuda_libs(tk: &build_cuda::CudaToolkit) {
+    for dir in tk.lib_dirs.iter().chain(&tk.cudnn_lib) {
+        println!("cargo:rustc-link-search=native={}", dir.display());
+        let stubs = dir.join("stubs");
+        if stubs.is_dir() {
+            println!("cargo:rustc-link-search=native={}", stubs.display());
         }
     }
-    None
-}
-
-fn probe_linux_cudnn() -> Option<PathBuf> {
-    for include in ["/usr/include/x86_64-linux-gnu", "/usr/include"] {
-        let path = PathBuf::from(include);
-        if path.join("cudnn.h").exists() {
-            return Some(path);
-        }
-    }
-    None
-}
-
-fn link_linux_cuda_libs(cuda_root: &Path) {
-    let lib_dir = cuda_root.join("lib64");
-    let stubs = lib_dir.join("stubs");
-    println!("cargo:rustc-link-search=native={}", lib_dir.display());
-    if stubs.is_dir() {
-        println!("cargo:rustc-link-search=native={}", stubs.display());
-    }
-    println!("cargo:rustc-link-search=native=/usr/lib/x86_64-linux-gnu");
     for lib in [
         "cudart",
         "cublas",
         "cublasLt",
         "cufft",
+        // MLX ≥ 0.32.3 links CUDA::cusolver (Cholesky / batched potrf).
+        "cusolver",
         "nvrtc",
         "cuda",
         "cudnn",
@@ -762,6 +821,35 @@ fn link_linux_cuda_libs(cuda_root: &Path) {
         "cudnn_engines_precompiled",
     ] {
         println!("cargo:rustc-link-lib=dylib={lib}");
+    }
+}
+
+/// MLX builds its NCCL distributed backend whenever CMake finds NCCL (common
+/// on CUDA machines and in NVIDIA's images); `libmlx.a` then needs it at link
+/// time. Link the library MLX's CMake found, from its cache.
+fn link_mlx_nccl(cache: &Path) {
+    let Ok(text) = std::fs::read_to_string(cache) else {
+        return;
+    };
+    let Some(lib) = text
+        .lines()
+        .find_map(|l| l.strip_prefix("NCCL_LIBRARIES:FILEPATH="))
+        .map(Path::new)
+        .filter(|p| p.is_file())
+    else {
+        return;
+    };
+    if let Some(dir) = lib.parent() {
+        println!("cargo:rustc-link-search=native={}", dir.display());
+    }
+    let file = lib.file_name().and_then(|f| f.to_str()).unwrap_or("");
+    let name = file.strip_prefix("lib").unwrap_or(file);
+    match name.split_once(".so") {
+        Some((stem, _)) => println!("cargo:rustc-link-lib=dylib={stem}"),
+        None => {
+            let stem = name.strip_suffix(".a").unwrap_or(name);
+            println!("cargo:rustc-link-lib=static={stem}");
+        }
     }
 }
 
@@ -779,7 +867,7 @@ fn link_lib_from_out_dir(out_dir: &Path, file_name: &str, link_name: &str) {
             return;
         }
     }
-    eprintln!(
+    println!(
         "cargo:warning=rlx-mlx-sys: {file_name} not found under OUT_DIR; \
          MLX Windows link may fail"
     );
@@ -832,7 +920,7 @@ fn linux_lapack_paths(out_dir: &Path) -> Option<LapackPaths> {
         return Some(paths);
     }
 
-    eprintln!(
+    println!(
         "cargo:warning=rlx-mlx-sys: lapacke.h not found; building OpenBLAS v{OPENBLAS_VERSION} into OUT_DIR (first build may take several minutes)"
     );
     bootstrap_openblas(out_dir)
@@ -900,7 +988,7 @@ fn lapack_include_dir(prefix: &Path) -> Option<PathBuf> {
             return Some(include_dir);
         }
     }
-    eprintln!(
+    println!(
         "cargo:warning=rlx-mlx-sys: OpenBLAS install missing lapacke.h under {}",
         prefix.join("include").display()
     );

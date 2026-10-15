@@ -100,6 +100,8 @@ pub const LAYERNORM_CU: &str = include_str!("../kernels/layernorm.cu");
 pub const LAYER_NORM_BWD_CU: &str = include_str!("../kernels/layer_norm_backward.cu");
 pub const RMS_NORM_BWD_CU: &str = include_str!("../kernels/rms_norm_backward.cu");
 pub const FAKE_QUANTIZE_CU: &str = include_str!("../kernels/fake_quantize.cu");
+/// `Op::RoundToFormat` (`round_to_format`).
+pub const ROUND_TO_FORMAT_CU: &str = include_str!("../kernels/round_to_format.cu");
 /// INT8 asymmetric Quantize / Dequantize (`quantize_i8` / `dequantize_i8`).
 pub const QUANTIZE_CU: &str = include_str!("../kernels/quantize.cu");
 /// Real INT8 `Op::QMatMul` (`q_matmul`) — packed i8 x/w/out + f32-lane bias.

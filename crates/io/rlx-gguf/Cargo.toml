@@ -3,7 +3,7 @@ name = "rlx-gguf"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
-description = "GGUF v1/v2/v3 parser + dequantization to f32. Standalone — no rlx-* deps."
+description = "GGUF v1/v2/v3 parser + dequantization to f32. Standalone — no rlx-* deps unless the `ir` feature is on."
 authors.workspace      = true
 license.workspace      = true
 keywords.workspace     = true
@@ -18,6 +18,12 @@ anyhow = "1"
 rayon = "1.10"
 memmap2 = "0.9"
 libc = "0.2"
+# `ir`: the GGML type → `rlx_ir::quant::QuantScheme` mapping (`quant_scheme`).
+rlx-ir = { workspace = true, optional = true }
+
+[features]
+default = []
+ir = ["dep:rlx-ir"]
 
 [dev-dependencies]
 tempfile = "3"
@@ -28,3 +34,4 @@ workspace = true
 [package.metadata.docs.rs]
 rustdoc-args   = ["--cfg", "docsrs"]
 all-features   = false
+features       = ["ir"]

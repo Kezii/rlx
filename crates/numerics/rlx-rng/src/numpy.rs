@@ -407,6 +407,57 @@ impl Generator {
     pub fn uniform(&mut self) -> f64 {
         self.random()
     }
+
+    /// numpy's `random_interval(bitgen, max)` — uniform on `[0, max]` by
+    /// **masked rejection**, the draw `Generator.shuffle` uses.
+    ///
+    /// Not [`integers`]: `Generator.integers` is Lemire, but `_shuffle_raw`
+    /// calls `random_interval` directly, so a shuffle built on Lemire is a
+    /// valid permutation that never matches numpy. Bounds that fit in 32 bits
+    /// draw 32-bit values (consuming PCG64's buffered halves); larger bounds
+    /// draw full 64-bit values.
+    pub fn random_interval(&mut self, max: u64) -> u64 {
+        if max == 0 {
+            return 0;
+        }
+        let mut mask = max;
+        mask |= mask >> 1;
+        mask |= mask >> 2;
+        mask |= mask >> 4;
+        mask |= mask >> 8;
+        mask |= mask >> 16;
+        mask |= mask >> 32;
+        if max <= 0xffff_ffff {
+            loop {
+                let v = (self.next_u32() as u64) & mask;
+                if v <= max {
+                    return v;
+                }
+            }
+        }
+        loop {
+            let v = self.next_u64() & mask;
+            if v <= max {
+                return v;
+            }
+        }
+    }
+
+    /// `Generator.shuffle(x)` for a 1-D array — Fisher-Yates from the end,
+    /// `j = random_interval(i)` for `i = n-1 .. 1` (numpy `_shuffle_raw`).
+    pub fn shuffle<T>(&mut self, x: &mut [T]) {
+        for i in (1..x.len()).rev() {
+            let j = self.random_interval(i as u64) as usize;
+            x.swap(i, j);
+        }
+    }
+
+    /// `Generator.permutation(n)` — `arange(n)` then [`Self::shuffle`].
+    pub fn permutation(&mut self, n: usize) -> Vec<usize> {
+        let mut v: Vec<usize> = (0..n).collect();
+        self.shuffle(&mut v);
+        v
+    }
 }
 
 /// `Generator.integers(0, high, size, dtype=int64)` — Lemire's multiply-shift.
@@ -551,6 +602,29 @@ mod randint_tests {
             rs.randint(0, 1i64 << 32, 4),
             vec![327741615, 976413892, 3349725721, 1369975286]
         );
+    }
+
+    /// `np.random.default_rng(seed).permutation(n)`, numpy 2.5.4. The weighted
+    /// checksum `Σ i·p[i]` pins every position, not just the printed prefix.
+    #[test]
+    fn generator_permutation_matches_numpy() {
+        let cases: [(u128, usize, &[usize], usize); 4] = [
+            (0, 10, &[4, 6, 2, 7, 3, 5, 9, 0, 8, 1], 195),
+            (12345, 37, &[24, 27, 12, 22, 18, 0, 32, 9, 19, 20, 33, 26], 11537),
+            (
+                4_294_967_295,
+                1000,
+                &[886, 862, 591, 711, 394, 38, 442, 195, 603, 995, 878, 359],
+                250_889_026,
+            ),
+            (987_654_321, 5, &[0, 4, 1, 3, 2], 23),
+        ];
+        for (seed, n, prefix, weighted) in cases {
+            let p = crate::numpy::Generator::new(seed).permutation(n);
+            assert_eq!(&p[..prefix.len()], prefix, "seed {seed} n {n}");
+            let w: usize = p.iter().enumerate().map(|(i, v)| i * v).sum();
+            assert_eq!(w, weighted, "seed {seed} n {n}");
+        }
     }
 
     #[test]

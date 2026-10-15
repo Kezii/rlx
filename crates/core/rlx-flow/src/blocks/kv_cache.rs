@@ -81,7 +81,22 @@ pub fn append_kv_row(
             let outer: Vec<usize> = (0..axis).map(|i| dims.dim(i).unwrap_static()).collect();
             (cap, outer)
         };
-        if pos < cap && kv_append_can_alias(&outer, axis) && !rlx_ir::env::flag(NO_INPLACE_KV) {
+        // How many rows this call appends. `Op::KvAppend` writes ONE, so a
+        // multi-token step (chunked / speculative decode) has to keep `concat`:
+        // the op would return a `pos + 1` prefix and drop the rest. Falling back
+        // here rather than letting `kv_append`'s shape check panic keeps the
+        // failure in one place — the flow declared a spare row and now emits no
+        // append, which `ModelFlow::build` reports with the contract error that
+        // names the fix.
+        let one_row = {
+            let step = gb.shape(row).dim(axis);
+            step.is_static() && step.unwrap_static() == 1
+        };
+        if pos < cap
+            && one_row
+            && kv_append_can_alias(&outer, axis)
+            && !rlx_ir::env::flag(NO_INPLACE_KV)
+        {
             return gb.kv_append(past, row, axis, pos);
         }
     }

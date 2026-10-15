@@ -5173,6 +5173,32 @@ impl MetalExecutable {
                         *q_max,
                     );
                 }
+                Thunk::RoundToFormat {
+                    src,
+                    amax,
+                    dst,
+                    n,
+                    last_dim,
+                    block,
+                    mode,
+                    format,
+                } => {
+                    if *n == 0 {
+                        continue;
+                    }
+                    encode_round_to_format(
+                        e!(),
+                        k,
+                        self.resolve_off(*src),
+                        amax.map(|a| self.resolve_off(a)),
+                        self.resolve_off(*dst),
+                        *n,
+                        *last_dim,
+                        *block,
+                        *mode,
+                        *format,
+                    );
+                }
                 Thunk::FakeQuantizePerBatch {
                     src,
                     dst,

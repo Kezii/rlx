@@ -32,6 +32,34 @@ let flow = ModelFlow::new("my_lm")
 let built = flow.build(&mut weights)?;
 ```
 
+## Weights
+
+`build` takes any `WeightSource`. Checkpoint files (feature `formats`):
+
+```rust
+use rlx_flow::formats::{self, GgufSource, SafetensorsSource};
+let mut w = SafetensorsSource::open("model_dir")?;            // file or shards
+let mut w = GgufSource::open("m.gguf")?.packed(true);          // DequantMatMul
+let mut w = formats::open(path)?;                              // by extension
+```
+
+Adapters (`WeightSourceExt`, in the prelude) — all pass packed weights through:
+
+```rust
+let mut w = CloningSource(&store);              // non-consuming, any `TensorLookup`
+let mut w = w.with_prefix("language_model.");   // names differ by a prefix
+let mut w = w.renamed(|k| k.replace("layers.", "blk."));
+let mut w = w.alias("lm_head.weight", "model.embed_tokens.weight"); // tied head
+let mut w = w.map_tensors(|k| k.ends_with("q_proj.weight"), |_, d, s| Ok((d, s)));
+let mut w = w.or(extra);                        // fill gaps from a second source
+let mut w = w.tracked();
+flow.build(&mut w)?;
+eprintln!("{}", w.report());                    // served / missing / unused keys
+```
+
+A missing key's error names the closest keys the source has
+(`missing weight: model.x (closest: language_model.model.x)`).
+
 ## Small composable blocks
 
 | Block | DSL | Purpose |

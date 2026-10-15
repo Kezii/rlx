@@ -106,6 +106,7 @@ pub const SUPPORTED_OPS: &[rlx_ir::OpKind] = {
         FakeQuantizeLSQ,
         FakeQuantizeLSQBackwardX,
         FakeQuantizeLSQBackwardScale,
+        RoundToFormat,
         Fma,
         ElementwiseRegion,
         TransformRegion,

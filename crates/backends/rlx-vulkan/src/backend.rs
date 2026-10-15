@@ -98,6 +98,7 @@ pub const SUPPORTED_OPS: &[rlx_ir::OpKind] = {
         GatedResidualBackward,
         // QAT: Fixed/PerBatch native SPIR-V; EMA / LSQ / STE HostOp.
         FakeQuantize,
+        RoundToFormat,
         FakeQuantizeLSQ,
         FakeQuantizeLSQBackwardX,
         FakeQuantizeLSQBackwardScale,
@@ -3308,6 +3309,46 @@ fn build_schedule(
                     "gated_residual_backward",
                     push,
                     groups1d(mod_rows as usize, 64),
+                );
+            }
+
+            Op::RoundToFormat { format, scaling } => {
+                use rlx_ir::FormatScaling;
+                let xd = dims(graph, out);
+                let n = numel(&xd);
+                let (mode, block) = match scaling {
+                    FormatScaling::None => (0u32, 1u32),
+                    FormatScaling::PerTensor => (1, 1),
+                    FormatScaling::Block(b) => (2, (*b).max(1)),
+                };
+                let last_dim = xd.last().copied().unwrap_or(1).max(1);
+                let x = node.inputs[0];
+                let amax_off = node.inputs.get(1).map_or(0, |&a| binder.off(arena, a));
+                let push = Push::default()
+                    .u(n as u32)
+                    .u(last_dim as u32)
+                    .u(block)
+                    .u(mode)
+                    .i(format.man_bits as i32)
+                    .i(format.emin())
+                    .i(format.emax())
+                    .f(format.max_normal)
+                    .u(binder.off(arena, x))
+                    .u(amax_off)
+                    .u(binder.off(arena, out))
+                    .bytes();
+                let threads = if mode == 2 {
+                    (n / last_dim) * last_dim.div_ceil(block as usize)
+                } else {
+                    n
+                };
+                push_gpu_step(
+                    &mut binder,
+                    &mut steps,
+                    &mut deps,
+                    "round_to_format",
+                    push,
+                    groups1d(threads, 64),
                 );
             }
 

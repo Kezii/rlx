@@ -66,7 +66,10 @@ pub fn is_host_op(op: &Op) -> bool {
         // Full-coverage host fallbacks (no MIL arm, or CPU-only kernels).
         // Fma / fused epilogues / FakeQuantize / Conv3d(with Param weights)
         // lower to MIL — see `mil::{activation,conv_pool,matmul,norm,quant}`.
-        Op::FakeQuantizeLSQ { .. }
+        // RoundToFormat: bit-level rounding (no MIL arm); the CPU kernel is
+        // the reference, so the host run is exact by construction.
+        Op::RoundToFormat { .. }
+        | Op::FakeQuantizeLSQ { .. }
         | Op::FakeQuantizeLSQBackwardX { .. }
         | Op::FakeQuantizeLSQBackwardScale { .. }
         | Op::ElementwiseRegion { .. }

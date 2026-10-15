@@ -31,6 +31,20 @@ blas-mkl = ["blas"]
 # throughput for byte-equivalent output — useful for parity tests
 # and reproducibility-critical workloads.
 parity-gemm = ["dep:gemm"]
+# BLAS-less builds only (no `rlx_cpu_blas`: the PS5, cross targets, aarch64
+# Linux without OpenBLAS): the GEMM fallback runs the `gemm` crate's
+# cache-blocked, runtime-dispatched AVX2/FMA/NEON kernels instead of a plain
+# loop nest — 4–9× on prefill-shaped GEMMs and ~40× on transposed-B (attention
+# QKᵀ) on an AVX2 core. Small-m products keep the loop, which is faster there.
+# No effect when a real BLAS is linked.
+portable-gemm = ["dep:gemm"]
+# x86-64 AVX2 int8 decode GEMVs (`m == 1`) for Q4_K / Q5_K / Q6_K / Q8_0 /
+# Q4_0 / Q4_1, which otherwise dequantize each block to f32 before the dot.
+# Rounds the activation to int8 like llama.cpp, so it is not bit-identical to
+# the f32 path (`RLX_Q4K_EXACT_GEMV` keeps Q4_K on the f32-activation arm).
+# Takes effect where decode reaches the packed kernel: BLAS-less builds, or a
+# thrashing dequant cache.
+int8-gemv = []
 # 3D Gaussian splat (`Op::GaussianSplatRender*`) — executors registered from `rlx-splat`.
 splat = []
 
@@ -62,7 +76,7 @@ rlx-opt = { workspace = true }
 # GGUF K-quant block decoders — used by Op::DequantMatMul's GGUF
 # schemes so packed weight bytes can stay in the arena until matmul
 # time instead of round-tripping through f32 at load.
-rlx-gguf = { workspace = true }
+rlx-gguf = { workspace = true, features = ["ir"] }
 rlx-mlx-io = { workspace = true }
 # F16/BF16 conversion for the CastDtype thunk (and any future
 # half-precision kernel work). Already in the workspace via

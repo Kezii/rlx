@@ -300,6 +300,8 @@ fn build_cpu_executable(
         input_slots,
         output_slots,
         handles: HashMap::new(),
+        arena_handles: std::collections::HashSet::new(),
+        kv_row_feeds: Vec::new(),
         active_extent: None,
         moe_resident: None,
         moe_resident_layers: None,
@@ -329,6 +331,18 @@ struct CpuExecutable {
     /// On run(): if a handle's name matches a graph input, the
     /// handle's data is used as the input.
     handles: HashMap<String, Vec<f32>>,
+    /// Resident handles (`bind_gpu_handle`) whose graph-input slot in the
+    /// arena is kept up to date in place: written once at bind, one row per
+    /// `feed_kv_row`, and left alone by the per-run zeroing. Rewriting a
+    /// padded KV cache into the arena every run cost O(bucket) per decoded
+    /// token. The planner keeps Input slots live for the whole run, so nothing
+    /// else writes them.
+    arena_handles: std::collections::HashSet<String>,
+    /// Resident KV row feeds: `(handle, output index)`. After a run,
+    /// [`ExecutableGraph::feed_kv_row`] copies one row of each output into its
+    /// handle, so a decode step moves the new token's K/V row instead of
+    /// round-tripping the whole cache through the host.
+    kv_row_feeds: Vec<(String, usize)>,
     /// Active-extent hint (`Some((actual, upper))`) for L1 bucketed
     /// dispatch. When set AND every thunk in the schedule is in
     /// `Thunk::safe_for_active_extent`, the executor processes only
@@ -569,6 +583,21 @@ impl CpuExecutable {
         }
     }
 
+    /// Write `data` into a node's arena buffer starting at element `start`
+    /// (cast to its storage dtype). Ignored past the end of the tensor.
+    fn write_input_elems(&mut self, id: NodeId, start: usize, data: &[f32]) {
+        let n_elems = self.graph.node(id).shape.num_elements().unwrap_or(0);
+        if start + data.len() > n_elems {
+            return;
+        }
+        let dtype = self.storage_dtype(id);
+        let off = self.arena.byte_offset(id) + start * dtype.size_bytes();
+        let buf = self.arena.raw_buf_mut();
+        unsafe {
+            write_typed_from_f32(buf.as_mut_ptr().add(off), dtype, data, data.len());
+        }
+    }
+
     /// Read a node's arena bytes back as Vec<f32>, casting from how it is
     /// *stored* (see [`Self::storage_dtype`]), not from what it is declared.
     fn read_output(&self, id: NodeId) -> Vec<f32> {
@@ -577,6 +606,80 @@ impl CpuExecutable {
         let buf = self.arena.raw_buf();
         let n_elems = self.graph.node(id).shape.num_elements().unwrap_or(0);
         unsafe { read_typed_to_f32(buf.as_ptr().add(off), dtype, n_elems) }
+    }
+
+    /// `len` elements of a node's arena buffer starting at element `start`,
+    /// cast from their storage dtype. `None` past the end of the tensor.
+    fn read_node_elems(&self, id: NodeId, start: usize, len: usize) -> Option<Vec<f32>> {
+        let n_elems = self.graph.node(id).shape.num_elements().unwrap_or(0);
+        if start.checked_add(len)? > n_elems {
+            return None;
+        }
+        let dtype = self.storage_dtype(id);
+        let off = self.arena.byte_offset(id) + start * dtype.size_bytes();
+        let buf = self.arena.raw_buf();
+        Some(unsafe { read_typed_to_f32(buf.as_ptr().add(off), dtype, len) })
+    }
+
+    /// Write inputs and execute: persistent handles first (they act as default
+    /// inputs), then the explicit `inputs`, which override handles of the same
+    /// name. Then sync any handle named after an output (`out{idx}`).
+    fn execute(&mut self, inputs: &[(&str, &[f32])]) {
+        self.restore_arena_baseline();
+        // 1. Handles. Taken out of the map while written so a resident KV
+        //    cache is copied into the arena once per run, not cloned first.
+        let handle_names: Vec<String> = self
+            .handles
+            .keys()
+            .filter(|n| !self.arena_handles.contains(*n))
+            .cloned()
+            .collect();
+        for name in handle_names {
+            if let Some(&id) = self.input_ids.get(&name)
+                && self.arena.has_buffer(id)
+                && let Some(data) = self.handles.remove(&name)
+            {
+                self.write_input(id, &data);
+                self.handles.insert(name, data);
+            }
+        }
+        // 2. Explicit per-call inputs override handles. An in-place handle
+        //    whose slot this overwrites goes back to being rewritten per run.
+        for &(name, data) in inputs {
+            if let Some(&id) = self.input_ids.get(name)
+                && self.arena.has_buffer(id)
+            {
+                self.write_input(id, data);
+                self.arena_handles.remove(name);
+            }
+        }
+
+        // Active-extent fast-path (PLAN L1): if hinted AND every thunk
+        // in the schedule supports it, run scaled. Otherwise fall back
+        // to full-extent dispatch — preserves correctness when the
+        // schedule contains a thunk that hasn't yet been wired in.
+        let active_used = if let Some((actual, upper)) = self.active_extent {
+            thunk::execute_thunks_active(&self.schedule, self.arena.raw_buf_mut(), actual, upper)
+        } else {
+            false
+        };
+        if !active_used {
+            // Execute via pre-compiled thunks (zero per-node dispatch overhead)
+            thunk::execute_thunks(&self.schedule, self.arena.raw_buf_mut());
+        }
+
+        self.dump_nodes_if_requested();
+
+        // 3. Sync any handle whose name matches a graph OUTPUT —
+        //    KV-cache pattern: outputs flow back into the same-named
+        //    handle for the next iteration.
+        for (idx, &out_id) in self.graph.outputs.iter().enumerate() {
+            let name = format!("out{idx}");
+            if self.handles.contains_key(&name) {
+                let v = self.read_output(out_id);
+                self.handles.insert(name, v);
+            }
+        }
     }
 }
 
@@ -588,6 +691,10 @@ impl ExecutableGraph for CpuExecutable {
             // `bind_handle` / `read_handle` are implemented below and return
             // real data; the flag said otherwise.
             persistent_handles: true,
+            // Resident KV: handles live in the executable and the row feed
+            // folds one output row into them per step (see below).
+            gpu_handles: true,
+            kv_resident: true,
             typed_io: true,
             active_extent: true,
             ..crate::ExecutableCapabilities::NONE
@@ -652,58 +759,28 @@ impl ExecutableGraph for CpuExecutable {
     }
 
     fn run(&mut self, inputs: &[(&str, &[f32])]) -> Vec<Vec<f32>> {
-        self.restore_arena_baseline();
-        // 1. Apply persistent handles first — they act like default inputs.
-        //    Explicit `inputs` passed to run() override matching handle names.
-        let handle_names: Vec<String> = self.handles.keys().cloned().collect();
-        for name in &handle_names {
-            if let Some(&id) = self.input_ids.get(name)
-                && self.arena.has_buffer(id)
-            {
-                let data = self.handles.get(name).cloned().unwrap_or_default();
-                self.write_input(id, &data);
-            }
-        }
-        // 2. Explicit per-call inputs override handles.
-        for &(name, data) in inputs {
-            if let Some(&id) = self.input_ids.get(name)
-                && self.arena.has_buffer(id)
-            {
-                self.write_input(id, data);
-            }
-        }
-
-        // Active-extent fast-path (PLAN L1): if hinted AND every thunk
-        // in the schedule supports it, run scaled. Otherwise fall back
-        // to full-extent dispatch — preserves correctness when the
-        // schedule contains a thunk that hasn't yet been wired in.
-        let active_used = if let Some((actual, upper)) = self.active_extent {
-            thunk::execute_thunks_active(&self.schedule, self.arena.raw_buf_mut(), actual, upper)
-        } else {
-            false
-        };
-        if !active_used {
-            // Execute via pre-compiled thunks (zero per-node dispatch overhead)
-            thunk::execute_thunks(&self.schedule, self.arena.raw_buf_mut());
-        }
-
-        self.dump_nodes_if_requested();
-
-        // 3. Sync any handle whose name matches a graph OUTPUT —
-        //    KV-cache pattern: outputs flow back into the same-named
-        //    handle for the next iteration.
-        for (idx, &out_id) in self.graph.outputs.iter().enumerate() {
-            let name = format!("out{idx}");
-            if self.handles.contains_key(&name) {
-                let v = self.read_output(out_id);
-                self.handles.insert(name, v);
-            }
-        }
-
+        self.execute(inputs);
         self.graph
             .outputs
             .iter()
             .map(|&out_id| self.read_output(out_id))
+            .collect()
+    }
+
+    /// Read back only `read_indices` (compacted, like the default): a resident
+    /// decode step reads the logits and leaves the K/V outputs in the arena
+    /// for `feed_kv_row` / `read_output_row`.
+    fn run_read_outputs(
+        &mut self,
+        inputs: &[(&str, &[f32])],
+        read_indices: Option<&[usize]>,
+    ) -> Vec<Vec<f32>> {
+        let Some(ix) = read_indices else {
+            return self.run(inputs);
+        };
+        self.execute(inputs);
+        ix.iter()
+            .filter_map(|&i| self.graph.outputs.get(i).map(|&id| self.read_output(id)))
             .collect()
     }
 
@@ -759,11 +836,82 @@ impl ExecutableGraph for CpuExecutable {
         // as the input. If the graph also writes back to this name (via
         // an output binding pattern), read_handle returns the latest.
         self.handles.insert(name.to_string(), data.to_vec());
+        self.arena_handles.remove(name);
         true
     }
 
     fn read_handle(&self, name: &str) -> Option<Vec<f32>> {
         self.handles.get(name).cloned()
+    }
+
+    // ── Resident KV ─────────────────────────────────────────────────────
+    // On the CPU the arena IS host memory, so "resident" means the cache
+    // lives in the executable (a persistent handle) instead of being padded,
+    // passed in and read back whole by the caller every step.
+
+    fn bind_gpu_handle(&mut self, name: &str, data: &[f32]) -> bool {
+        self.bind_handle(name, data);
+        if let Some(&id) = self.input_ids.get(name)
+            && self.arena.has_buffer(id)
+        {
+            self.write_input(id, data);
+            self.arena_handles.insert(name.to_string());
+        }
+        true
+    }
+
+    fn has_gpu_handle(&self, name: &str) -> bool {
+        self.handles.contains_key(name)
+    }
+
+    fn read_gpu_handle(&self, name: &str) -> Option<Vec<f32>> {
+        self.read_handle(name)
+    }
+
+    fn read_gpu_handle_row(&self, name: &str, row: usize, row_inner: usize) -> Option<Vec<f32>> {
+        let h = self.handles.get(name)?;
+        let start = row.checked_mul(row_inner)?;
+        h.get(start..start.checked_add(row_inner)?)
+            .map(<[f32]>::to_vec)
+    }
+
+    fn register_kv_row_feed(&mut self, handle_name: &str, output_index: usize) -> bool {
+        self.kv_row_feeds.retain(|(h, _)| h != handle_name);
+        self.kv_row_feeds
+            .push((handle_name.to_string(), output_index));
+        true
+    }
+
+    /// Copy row `src_row` of each fed output into its handle at `dst_row`. A
+    /// `dst_row` past the handle (the step that fills a bucket) is skipped:
+    /// the caller rebinds from its host mirror on the bucket change.
+    fn feed_kv_row(&mut self, src_row: usize, dst_row: usize, row_elems: usize) -> bool {
+        let feeds = std::mem::take(&mut self.kv_row_feeds);
+        for (handle, out_idx) in &feeds {
+            let Some(&out_id) = self.graph.outputs.get(*out_idx) else {
+                continue;
+            };
+            let Some(row) = self.read_node_elems(out_id, src_row * row_elems, row_elems) else {
+                continue;
+            };
+            if let Some(dst) = self.handles.get_mut(handle)
+                && let Some(slot) = dst.get_mut(dst_row * row_elems..(dst_row + 1) * row_elems)
+            {
+                slot.copy_from_slice(&row);
+                if self.arena_handles.contains(handle)
+                    && let Some(&id) = self.input_ids.get(handle)
+                {
+                    self.write_input_elems(id, dst_row * row_elems, &row);
+                }
+            }
+        }
+        self.kv_row_feeds = feeds;
+        true
+    }
+
+    fn read_output_row(&self, out_idx: usize, row: usize, row_inner: usize) -> Option<Vec<f32>> {
+        let &out_id = self.graph.outputs.get(out_idx)?;
+        self.read_node_elems(out_id, row.checked_mul(row_inner)?, row_inner)
     }
 
     fn set_active_extent(&mut self, extent: Option<(usize, usize)>) {
@@ -977,23 +1125,30 @@ impl CpuExecutable {
     /// This keeps the per-run cost O(scratch) instead of O(params): a previous
     /// version cloned + rewrote the entire (multi-GB) weight region every run,
     /// which made large models swap-thrash.
+    /// Nodes whose arena bytes survive between runs: params, constants, and
+    /// the inputs of resident handles kept in place (see `arena_handles`).
+    fn persistent_ids(&self) -> std::collections::HashSet<NodeId> {
+        let mut s: std::collections::HashSet<NodeId> = self.param_ids.values().copied().collect();
+        for node in self.graph.nodes() {
+            if matches!(node.op, Op::Constant { .. }) {
+                s.insert(node.id);
+            }
+        }
+        s.extend(
+            self.arena_handles
+                .iter()
+                .filter_map(|name| self.input_ids.get(name).copied()),
+        );
+        s
+    }
+
     /// Sorted, merged persistent (param + constant) byte ranges in the arena.
     /// These live for the whole execution; everything else is ephemeral scratch.
     /// Used by `release_scratch_pages` (returns the complement's pages to the
     /// OS), which is `cfg(unix)` — hence the same gate here.
-    /// `restore_arena_baseline` computes its own persistent set inline.
     #[cfg(unix)]
     fn persistent_keep_ranges(&self) -> Vec<(usize, usize)> {
-        let persistent: std::collections::HashSet<NodeId> = {
-            let mut s: std::collections::HashSet<NodeId> =
-                self.param_ids.values().copied().collect();
-            for node in self.graph.nodes() {
-                if matches!(node.op, Op::Constant { .. }) {
-                    s.insert(node.id);
-                }
-            }
-            s
-        };
+        let persistent = self.persistent_ids();
         let mut keep: Vec<(usize, usize)> = self
             .graph
             .nodes()
@@ -1072,16 +1227,7 @@ impl CpuExecutable {
 
     fn restore_arena_baseline(&mut self) {
         // Persistent slots (params + constants) — never zeroed.
-        let persistent: std::collections::HashSet<NodeId> = {
-            let mut s: std::collections::HashSet<NodeId> =
-                self.param_ids.values().copied().collect();
-            for node in self.graph.nodes() {
-                if matches!(node.op, Op::Constant { .. }) {
-                    s.insert(node.id);
-                }
-            }
-            s
-        };
+        let persistent = self.persistent_ids();
 
         // Write compile-time constants into the arena once (a fresh arena is
         // zero-initialized; params are already resident via set_param).

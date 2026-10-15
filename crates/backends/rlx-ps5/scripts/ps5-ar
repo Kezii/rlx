@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Archiver for `cc`-built dependencies (see .cargo/config.toml).
+set -euo pipefail
+: "${PS5_PAYLOAD_SDK:?set PS5_PAYLOAD_SDK to the ps5-payload-dev SDK}"
+exec "$PS5_PAYLOAD_SDK/bin/prospero-ar" "$@"

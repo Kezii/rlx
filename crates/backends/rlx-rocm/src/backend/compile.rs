@@ -3084,6 +3084,35 @@ impl RocmExecutable {
                         eps_bits: eps.to_bits(),
                     });
                 }
+                Op::RoundToFormat { format, scaling } => {
+                    use rlx_ir::FormatScaling;
+                    let (mode, block) = match scaling {
+                        FormatScaling::None => (0u32, 1u32),
+                        FormatScaling::PerTensor => (1, 1),
+                        FormatScaling::Block(b) => (2, (*b).max(1)),
+                    };
+                    schedule.push(Step::RoundToFormat {
+                        in_off: (arena.offset(node.inputs[0]) / 4) as u32,
+                        amax_off: node
+                            .inputs
+                            .get(1)
+                            .map_or(0, |&a| (arena.offset(a) / 4) as u32),
+                        out_off: (arena.offset(node.id) / 4) as u32,
+                        n: node.shape.num_elements().unwrap() as u32,
+                        last_dim: node
+                            .shape
+                            .dims()
+                            .last()
+                            .map_or(1, |d| d.unwrap_static())
+                            .max(1) as u32,
+                        block,
+                        mode,
+                        man_bits: format.man_bits as i32,
+                        emin: format.emin(),
+                        emax: format.emax(),
+                        max_bits: format.max_normal.to_bits(),
+                    });
+                }
                 Op::FakeQuantize {
                     bits,
                     axis,

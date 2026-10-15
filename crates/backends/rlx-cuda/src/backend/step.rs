@@ -1724,6 +1724,21 @@ pub(crate) enum Step {
         inner: u32,
         q_max_bits: u32,
     },
+    /// Native `Op::RoundToFormat` (`round_to_format.cu`); `mode` 0 none,
+    /// 1 per-tensor (`amax_off`), 2 per block.
+    RoundToFormat {
+        in_off: u32,
+        amax_off: u32,
+        out_off: u32,
+        n: u32,
+        last_dim: u32,
+        block: u32,
+        mode: u32,
+        man_bits: i32,
+        emin: i32,
+        emax: i32,
+        max_bits: u32,
+    },
     /// Native `Op::FakeQuantize` PerBatch (derive scale from max abs).
     FakeQuantizePerBatch {
         in_off: u32,
@@ -2455,6 +2470,7 @@ pub(crate) fn step_name(step: &Step) -> &'static str {
         Step::LayerNormBackwardGamma { .. } => "rlx::LayerNormBackwardGamma",
         Step::FakeQuantizeFixed { .. } => "rlx::FakeQuantizeFixed",
         Step::FakeQuantizePerBatch { .. } => "rlx::FakeQuantizePerBatch",
+        Step::RoundToFormat { .. } => "rlx::RoundToFormat",
         Step::FakeQuantizeEma { .. } => "rlx::FakeQuantizeEma",
         Step::QuantizeI8 { .. } => "rlx::QuantizeI8",
         Step::DequantizeI8 { .. } => "rlx::DequantizeI8",
@@ -3695,6 +3711,19 @@ pub(crate) fn step_offsets(step: &Step) -> (Vec<u32>, Vec<u32>) {
         Step::FakeQuantizePerBatch {
             in_off, out_off, ..
         } => (vec![*in_off], vec![*out_off]),
+        Step::RoundToFormat {
+            in_off,
+            amax_off,
+            out_off,
+            mode,
+            ..
+        } => {
+            let mut r = vec![*in_off];
+            if *mode == 1 {
+                r.push(*amax_off);
+            }
+            (r, vec![*out_off])
+        }
         Step::FakeQuantizeEma {
             in_off,
             scale_off,

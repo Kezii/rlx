@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# rustc → PS5 SDK linker shim. Requires PS5_PAYLOAD_SDK (ps5-payload-dev SDK).
+#
+# rustc links the prebuilt FreeBSD std against FreeBSD's system libraries; the
+# console has none of them. Sony's libc (libc + libSceLibcInternal) carries the
+# libm/librt functions, the SDK's libunwind stands in for libgcc_s, and
+# `-nodefaultlibs` is dropped so prospero-clang adds Sony's libs and crt.
+# As the C compiler for cc-built dependencies it drops cc-rs's `--target=`.
+# Logs the original link line to $PS5_LINK_LOG when set.
+set -euo pipefail
+: "${PS5_PAYLOAD_SDK:?set PS5_PAYLOAD_SDK to the ps5-payload-dev SDK}"
+if [ -n "${PS5_LINK_LOG:-}" ]; then printf '%q ' "$@" > "$PS5_LINK_LOG"; fi
+
+args=()
+for a in "$@"; do
+    case "$a" in
+        -lrt | -lutil | -lexecinfo | -lkvm | -lmemstat | -lprocstat | -ldevstat | -lm) ;;
+        -nodefaultlibs) ;;
+        -lgcc_s) args+=("-lunwind") ;;
+        # cc-rs passes its own `--target=x86_64-unknown-freebsd`, which would
+        # override prospero-clang's `x86_64-sie-ps5`; keep the rest of its
+        # defaults (optimization level, -fPIC).
+        --target=*) ;;
+        *) args+=("$a") ;;
+    esac
+done
+# std uses FreeBSD 12 stat/dirent layouts; compat/compat.c widens Sony's
+# FreeBSD 11 results (see the comment there). Link steps only: the same shim
+# is the C compiler for `cc`-built dependencies (zstd-sys, …).
+link=1
+for a in "$@"; do [ "$a" = "-c" ] && link=0; done
+if [ "$link" = 1 ]; then
+    for f in stat lstat fstat fstatat readdir; do args+=("-Wl,--wrap=$f"); done
+fi
+exec "$PS5_PAYLOAD_SDK/bin/prospero-clang" "${args[@]}"

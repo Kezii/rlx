@@ -354,13 +354,18 @@ mod capabilities_tests {
         assert!(caps.persistent_handles);
         assert!(caps.typed_io);
         assert!(caps.active_extent);
-        assert!(!caps.gpu_handles);
+        // Resident KV: the arena is host memory, so a "resident" cache is a
+        // persistent handle plus a one-row feed per step.
+        assert!(caps.gpu_handles);
+        assert!(caps.kv_resident);
         assert_eq!(
             caps.enabled_names(),
             vec![
                 "clone",
                 "moe",
                 "persistent_handles",
+                "gpu_handles",
+                "kv_resident",
                 "typed_io",
                 "active_extent"
             ]
@@ -834,7 +839,7 @@ pub trait ExecutableGraph: Send {
     /// how many sync points they cost, and how many are independent — or
     /// `None` when it runs entirely on the device.
     ///
-    /// Ungated, unlike [`Self::wgpu_requires_host`]: the same information is
+    /// Ungated, unlike `wgpu_requires_host` (wasm only): the same information is
     /// what a native caller needs to decide whether a graph is worth moving to
     /// this backend at all.
     fn wgpu_host_summary(&self) -> Option<String> {

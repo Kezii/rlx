@@ -341,6 +341,30 @@ impl ModelFlow {
         self
     }
 
+    /// [`Self::bind_decode_inputs`] or [`Self::bind_decode_inputs_with_capacity`],
+    /// chosen by `kv_spare`.
+    ///
+    /// `kv_spare` MUST be the same value used to size the declared `past_k_*` /
+    /// `past_v_*` inputs — i.e. `blocks::kv_spare_rows(..)` evaluated once and
+    /// threaded to both places. Every family was writing this conditional by
+    /// hand, and getting it wrong is silent rather than loud: a spare row
+    /// WITHOUT the contract leaves the decode layer on `concat`, which then
+    /// writes the new token one index past where every reader looks, so the
+    /// cache stops growing and decode repeats the previous token.
+    pub fn bind_decode_inputs_for_kv_spare(
+        self,
+        num_layers: usize,
+        custom_mask: bool,
+        past_len: usize,
+        kv_spare: usize,
+    ) -> Self {
+        if kv_spare == 0 {
+            self.bind_decode_inputs(num_layers, custom_mask, true)
+        } else {
+            self.bind_decode_inputs_with_capacity(num_layers, custom_mask, past_len)
+        }
+    }
+
     /// Repeat a per-layer stage `count` times (layer index passed to closure).
     pub fn repeat_layers(
         mut self,

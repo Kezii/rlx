@@ -33,12 +33,12 @@ use crate::kernels::{
     LstmParams, Mamba2Params, MatmulParams, MatmulQkvParams, MaxPool2dBwdParams,
     MaxPool3dBwdParams, NarrowConcatParams, Pool1dParams, Pool2dParams, Pool3dParams,
     QConv2dParams, QMatMulParams, QUANT_I8_MAX_CHAN, QuantI8Params, ReduceParams, RmsNormBwdParams,
-    RnnParams, RopeBwdParams, RopeParams, SampleParams, ScaledGroupedMatmulParams,
-    ScaledLowpParams, ScatterAddParams, SceBwdParams, SceParams, SelectiveScanParams,
-    SoftmaxParams, TopKParams, TransposeParams, UmapKnnParams, UnaryParams, WelchPeaksGpuParams,
-    WhereParams, activation_backward_kernel, ada_layer_norm_backward_kernel, ada_layer_norm_kernel,
-    argmax_kernel, attention_bwd_kernel, attention_kernel, axial_rope2d_kernel,
-    batch_elementwise_region_kernel, batch_norm_inference_bwd_beta_kernel,
+    RnnParams, RopeBwdParams, RopeParams, RoundToFormatParams, SampleParams,
+    ScaledGroupedMatmulParams, ScaledLowpParams, ScatterAddParams, SceBwdParams, SceParams,
+    SelectiveScanParams, SoftmaxParams, TopKParams, TransposeParams, UmapKnnParams, UnaryParams,
+    WelchPeaksGpuParams, WhereParams, activation_backward_kernel, ada_layer_norm_backward_kernel,
+    ada_layer_norm_kernel, argmax_kernel, attention_bwd_kernel, attention_kernel,
+    axial_rope2d_kernel, batch_elementwise_region_kernel, batch_norm_inference_bwd_beta_kernel,
     batch_norm_inference_bwd_gamma_kernel, batch_norm_inference_bwd_input_kernel,
     batch_norm_inference_kernel, binary_c64_kernel, binary_kernel, cast_f32_to_f16_kernel,
     cast_kernel, compare_kernel, complex_cast_kernel, complex_norm_sq_backward_kernel,
@@ -65,13 +65,13 @@ use crate::kernels::{
     matmul_wide_active_kernel, matmul_wide_kernel, maxpool2d_backward_kernel,
     maxpool3d_backward_kernel, narrow_kernel, pool1d_kernel, pool2d_kernel, pool3d_kernel,
     q_conv2d_kernel, q_matmul_kernel, quantize_i8_kernel, reduce_kernel, rms_norm_backward_kernel,
-    rms_norm_backward_param_kernel, rnn_kernel, rope_backward_kernel, rope_kernel, sample_kernel,
-    scaled_dequantize_kernel, scaled_grouped_matmul_decode_kernel, scaled_matmul_decode_kernel,
-    scaled_quant_scale_kernel, scaled_quantize_kernel, scatter_add_kernel, scatter_elements_kernel,
-    scatter_nd_reduce_kernel, selective_scan_kernel, softmax_cross_entropy_backward_kernel,
-    softmax_cross_entropy_kernel, softmax_cross_entropy_with_logits_kernel, softmax_kernel,
-    topk_kernel, transpose_kernel, umap_knn_kernel, unary_f16_mirror_kernel, unary_kernel,
-    welch_peaks_gpu_kernel, where_kernel,
+    rms_norm_backward_param_kernel, rnn_kernel, rope_backward_kernel, rope_kernel,
+    round_to_format_kernel, sample_kernel, scaled_dequantize_kernel,
+    scaled_grouped_matmul_decode_kernel, scaled_matmul_decode_kernel, scaled_quant_scale_kernel,
+    scaled_quantize_kernel, scatter_add_kernel, scatter_elements_kernel, scatter_nd_reduce_kernel,
+    selective_scan_kernel, softmax_cross_entropy_backward_kernel, softmax_cross_entropy_kernel,
+    softmax_cross_entropy_with_logits_kernel, softmax_kernel, topk_kernel, transpose_kernel,
+    umap_knn_kernel, unary_f16_mirror_kernel, unary_kernel, welch_peaks_gpu_kernel, where_kernel,
 };
 use rlx_gpu_dispatch::indexing::{KernelKind as IndexKind, Reduction as IndexReduction};
 use rlx_ir::dynamic::{bind_graph, has_dynamic_dims, infer_bindings_from_f32_inputs, same_binding};
@@ -8805,6 +8805,73 @@ pub(crate) fn compile_static_inner(
                     size,
                     &u,
                 );
+                uniforms.push(u);
+                bind_groups.push(bg);
+            }
+            Op::RoundToFormat { format, scaling } => {
+                use rlx_ir::FormatScaling;
+                let in_id = node.inputs[0];
+                let (mode, block) = match scaling {
+                    FormatScaling::None => (0u32, 1u32),
+                    FormatScaling::PerTensor => (1, 1),
+                    FormatScaling::Block(b) => (2, *b),
+                };
+                let mut win = vec![node.id, in_id];
+                win.extend(node.inputs.get(1).copied());
+                let max_binding = dev.device.limits().max_storage_buffer_binding_size;
+                let fits = arena_span_bytes(&arena, &win) <= max_binding;
+                let mut scratch = arena.scratch_off as u64;
+                let (mut base, mut size, param_anchor) = arena_multi_op_window(
+                    &dev.device,
+                    &arena,
+                    &graph,
+                    &param_offsets,
+                    &mut schedule,
+                    &mut scratch,
+                    &win,
+                );
+                if !fits && !param_anchor {
+                    base =
+                        arena_bind_window_covering_scratch_if_needed(&arena, base, size, scratch);
+                }
+                let mut window_off = |id| {
+                    arena_off_in_bind_window(
+                        &graph,
+                        &param_offsets,
+                        &dev.device,
+                        &arena,
+                        &mut schedule,
+                        &mut scratch,
+                        id,
+                        &mut base,
+                        &mut size,
+                    )
+                };
+                let in_off = window_off(in_id);
+                let amax_off = node.inputs.get(1).map_or(0, |&a| window_off(a));
+                let p = RoundToFormatParams {
+                    n: node.shape.num_elements().unwrap() as u32,
+                    last_dim: node
+                        .shape
+                        .dims()
+                        .last()
+                        .map_or(1, |d| d.unwrap_static())
+                        .max(1) as u32,
+                    block,
+                    mode,
+                    man_bits: format.man_bits as i32,
+                    emin: format.emin(),
+                    emax: format.emax(),
+                    max_normal: format.max_normal,
+                    in_off,
+                    amax_off,
+                    out_off: arena_local_off_f32(&arena, node.id, base),
+                    _pad: 0,
+                };
+                schedule.push(Step::RoundToFormat { params: p });
+                let sk = round_to_format_kernel(&dev.device);
+                let u = emit_uniform(std::mem::size_of::<RoundToFormatParams>());
+                let bg = bind_arena_window(&dev.device, sk, &arena, base, size, &u);
                 uniforms.push(u);
                 bind_groups.push(bg);
             }

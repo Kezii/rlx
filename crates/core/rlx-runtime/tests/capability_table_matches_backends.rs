@@ -177,3 +177,42 @@ fn kv_resident_implies_a_row_feed_that_registers() {
         eprintln!("  {name}: kv_resident is backed by a real row feed");
     }
 }
+
+/// **...and a working row READ.**
+///
+/// The feed is only half the recipe. A caller keeps a host mirror of the cache
+/// so it can re-seed a wider bucket or roll back, so every step reads the new
+/// row back (`read_output_row`) and then relocates it (`feed_kv_row`); see
+/// `gpu_kv`'s docs and `tests/cpu_resident_kv.rs`. A backend with the feed but
+/// not the read passes the test above, binds without complaint, and then fails
+/// on the FIRST decode step.
+///
+/// That is not hypothetical: rlx-wgpu advertised `kv_resident` while overriding
+/// `bind_gpu_handle`, `register_kv_row_feed` and `feed_kv_row` but NOT
+/// `read_output_row`, so it inherited the `None` default — found when
+/// rlx-unlimited-ocr's resident decode was run on wgpu and died at
+/// "resident K row read, layer 0". Three of four methods is not the contract.
+#[test]
+fn kv_resident_implies_a_row_read_that_returns_the_row() {
+    let _gpu = common::serialize_gpu();
+    for (name, dev) in DEVICES {
+        if skip_unless_available(*dev, name) {
+            continue;
+        }
+        let mut c = Session::new(*dev).compile(trivial());
+        if !c.capabilities().kv_resident {
+            continue;
+        }
+        let want = [1.0f32, -2.0, 3.0, -4.0];
+        let outs = c.run(&[("x", &want)]);
+        assert_eq!(outs[0].len(), 4, "{name}: trivial() output changed shape");
+        // relu of the input, as one row of width 4.
+        let expect = [1.0f32, 0.0, 3.0, 0.0];
+        assert_eq!(
+            c.read_output_row(0, 0, 4).as_deref(),
+            Some(&expect[..]),
+            "{name}: claims kv_resident but read_output_row did not return the              row — the feed half works and the read half does not, which fails              mid-decode rather than at bind time"
+        );
+        eprintln!("  {name}: kv_resident is backed by a real row read too");
+    }
+}

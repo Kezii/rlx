@@ -7773,3 +7773,25 @@ fn sgemm_operand_inside_destination_is_not_clobbered() {
         "operand inside destination clobbered: max|Δ| = {worst:.3e}"
     );
 }
+
+/// The decode attention's lane-split Q·K dots must be bit-identical to the
+/// scalar `dot += q[d] * k[d]` loop they replace — including a short last
+/// group of keys and keys taken out of order.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn decode_attention_lane_dots_are_bit_identical() {
+    let (dh, stride, off) = (128usize, 3 * 128usize, 128usize);
+    let val = |i: usize| ((i * 2_654_435_761 % 10_007) as f32 / 10_007.0 - 0.5) * 3.0;
+    let q: Vec<f32> = (0..dh).map(val).collect();
+    let k: Vec<f32> = (0..40 * stride).map(|i| val(i + 7)).collect();
+    let keys: Vec<usize> = (0..40).filter(|i| i % 3 != 1).rev().collect();
+    let mut got = vec![0f32; keys.len()];
+    super::exec_dispatch::dots_by_key_lanes(&q, &k, &keys, stride, off, &mut got);
+    for (&ki, g) in keys.iter().zip(&got) {
+        let mut dot = 0f32;
+        for d in 0..dh {
+            dot += q[d] * k[ki * stride + off + d];
+        }
+        assert_eq!(g.to_bits(), dot.to_bits(), "key {ki}: {g} vs {dot}");
+    }
+}

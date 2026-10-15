@@ -27,51 +27,12 @@
 ///
 /// The whole grid is emulated in `f32`, so the result is an ordinary `f32` that
 /// happens to be one of the format's representable values.
+///
+/// Delegates to [`rlx_ir::FloatFormat::round`], the single definition every
+/// backend's `Op::RoundToFormat` kernel is checked against.
 #[inline]
 pub fn quantize(x: f32, exp_bits: u32, man_bits: u32, max_normal: f32) -> f32 {
-    if x == 0.0 || x.is_nan() {
-        return x;
-    }
-    let neg = x.is_sign_negative();
-    let ax = x.abs();
-    if ax >= max_normal {
-        return if neg { -max_normal } else { max_normal };
-    }
-    let bias = (1i32 << (exp_bits - 1)) - 1;
-    let emin = 1 - bias; // smallest normal exponent
-    // Exponent of `ax`, floored, clamped up into the subnormal region so the
-    // ULP never shrinks below the format's smallest step.
-    let e = ax.log2().floor() as i32;
-    let e_eff = e.max(emin);
-    // Unit-in-the-last-place at this magnitude.
-    let ulp = exp2i(e_eff - man_bits as i32);
-    let q = round_half_even(ax / ulp) * ulp;
-    let q = q.min(max_normal);
-    if neg { -q } else { q }
-}
-
-/// `2^n` for a (possibly negative) integer exponent, without `powi` overflow
-/// pitfalls at the extremes.
-#[inline]
-fn exp2i(n: i32) -> f32 {
-    // f32 exponent range is [-149, 127]; clamp keeps subnormal ULPs finite.
-    2f32.powi(n.clamp(-149, 127))
-}
-
-/// Round to nearest integer, ties to even (banker's rounding).
-#[inline]
-fn round_half_even(v: f32) -> f32 {
-    let f = v.floor();
-    let diff = v - f;
-    if diff < 0.5 {
-        f
-    } else if diff > 0.5 {
-        f + 1.0
-    } else if (f as i64) & 1 == 0 {
-        f // already even
-    } else {
-        f + 1.0
-    }
+    rlx_ir::FloatFormat::ieee(exp_bits as u8, man_bits as u8, max_normal).round(x)
 }
 
 /// Quantize every element of `xs` in place to `(exp_bits, man_bits, max_normal)`.
@@ -163,33 +124,12 @@ float_format! {
 /// `Y` mantissa bits, `Z` exponent bits — e.g. `"f8m3e4"` (== E4M3),
 /// `"f4m1e2"` (== NVFP4). For generic specs `max_normal` uses the IEEE
 /// Inf-reserving convention `(2 − 2^-Y)·2^bias`.
+///
+/// Delegates to [`rlx_ir::FloatFormat::parse`], which also accepts the
+/// all-finite `fNeXmY` spelling (`f4e3m0`) and `f6` (OCP E2M3).
 pub fn parse_format(spec: &str) -> Option<(u32, u32, f32)> {
-    let s = spec.trim().to_ascii_lowercase();
-    for (name, e, m, max) in BUILTIN {
-        if s == *name {
-            return Some((*e, *m, *max));
-        }
-    }
-    match s.as_str() {
-        "fp8" | "f8" | "e4m3" => return Some((4, 3, 448.0)),
-        "e5m2" => return Some((5, 2, 57344.0)),
-        "fp4" | "f4" | "e2m1" => return Some((2, 1, 6.0)),
-        "half" => return Some((5, 10, 65504.0)),
-        _ => {}
-    }
-    // Generic `f{X}m{Y}e{Z}`.
-    let rest = s.strip_prefix('f')?;
-    let (x_str, rest) = rest.split_once('m')?;
-    let (y_str, z_str) = rest.split_once('e')?;
-    let total: u32 = x_str.parse().ok()?;
-    let man: u32 = y_str.parse().ok()?;
-    let exp: u32 = z_str.parse().ok()?;
-    if exp == 0 || 1 + man + exp != total {
-        return None; // sign + exp + man must account for every bit
-    }
-    let bias = (1i32 << (exp - 1)) - 1;
-    let max = (2.0 - exp2i(-(man as i32))) * exp2i(bias);
-    Some((exp, man, max))
+    let f = rlx_ir::FloatFormat::parse(spec)?;
+    Some((f.exp_bits as u32, f.man_bits as u32, f.max_normal))
 }
 
 #[cfg(test)]

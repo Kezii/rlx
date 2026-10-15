@@ -53,12 +53,13 @@ use crate::kernels::{
     maxpool2d_backward_kernel, maxpool3d_backward_kernel, narrow_kernel, pool1d_kernel,
     pool2d_kernel, pool3d_kernel, q_conv2d_kernel, q_matmul_kernel, quantize_i8_kernel,
     reduce_kernel, rms_norm_backward_kernel, rms_norm_backward_param_kernel, rnn_kernel,
-    rope_backward_kernel, rope_kernel, sample_kernel, scaled_dequantize_kernel,
-    scaled_grouped_matmul_decode_kernel, scaled_matmul_decode_kernel, scaled_quant_scale_kernel,
-    scaled_quantize_kernel, scatter_add_kernel, scatter_elements_kernel, scatter_nd_reduce_kernel,
-    selective_scan_kernel, softmax_cross_entropy_backward_kernel, softmax_cross_entropy_kernel,
-    softmax_cross_entropy_with_logits_kernel, softmax_kernel, topk_kernel, transpose_kernel,
-    umap_knn_kernel, unary_f16_mirror_kernel, unary_kernel, welch_peaks_gpu_kernel, where_kernel,
+    rope_backward_kernel, rope_kernel, round_to_format_kernel, sample_kernel,
+    scaled_dequantize_kernel, scaled_grouped_matmul_decode_kernel, scaled_matmul_decode_kernel,
+    scaled_quant_scale_kernel, scaled_quantize_kernel, scatter_add_kernel, scatter_elements_kernel,
+    scatter_nd_reduce_kernel, selective_scan_kernel, softmax_cross_entropy_backward_kernel,
+    softmax_cross_entropy_kernel, softmax_cross_entropy_with_logits_kernel, softmax_kernel,
+    topk_kernel, transpose_kernel, umap_knn_kernel, unary_f16_mirror_kernel, unary_kernel,
+    welch_peaks_gpu_kernel, where_kernel,
 };
 use rlx_ir::dynamic::{bind_graph, has_dynamic_dims, infer_bindings_from_f32_inputs, same_binding};
 use rlx_ir::op::{Activation, BinaryOp, CmpOp, MaskKind, ReduceOp};
@@ -410,7 +411,7 @@ impl WgpuExecutable {
     ///
     /// Callers used to have only [`Self::requires_host_execution`] — one bit,
     /// which is why the browser WebGPU refusal could name only the ops it
-    /// *might* have been. See [`super::host_plan`].
+    /// *might* have been. See [`super::HostPlan`].
     pub fn host_plan(&self) -> super::HostPlan {
         super::host_plan(&self.schedule)
     }
@@ -1035,6 +1036,12 @@ impl WgpuExecutable {
                         if p.chan_dim <= 1 {
                             p.inner = p.n.max(1);
                         }
+                        dev.queue
+                            .write_buffer(&self.uniforms[gpu_ui], 0, bytemuck::bytes_of(&p));
+                    }
+                    Step::RoundToFormat { params } => {
+                        let mut p = *params;
+                        p.n = scale(p.n);
                         dev.queue
                             .write_buffer(&self.uniforms[gpu_ui], 0, bytemuck::bytes_of(&p));
                     }
@@ -2605,6 +2612,21 @@ impl WgpuExecutable {
                                 pass.set_pipeline(&pk.pipeline);
                                 pass.set_bind_group(0, &self.bind_groups[gpu_bi], &[]);
                                 let (gx, gy, gz) = dispatch_dims(n_s, 64);
+                                pass.dispatch_workgroups(gx, gy, gz);
+                            }
+                            Step::RoundToFormat { params } => {
+                                let n_s = scale(params.n);
+                                if n_s == 0 {
+                                    if !matches!(step, Step::FftGpu { .. }) {
+                                        gpu_bi += 1;
+                                    }
+                                    step_i += 1;
+                                    continue;
+                                }
+                                let pk = round_to_format_kernel(&dev.device);
+                                pass.set_pipeline(&pk.pipeline);
+                                pass.set_bind_group(0, &self.bind_groups[gpu_bi], &[]);
+                                let (gx, gy, gz) = dispatch_dims(params.threads(n_s), 64);
                                 pass.dispatch_workgroups(gx, gy, gz);
                             }
                             Step::FakeQuantizePerBatch { params } => {

@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use rlx_ir::hir::HirModule;
-use rlx_ir::{Graph, GraphModule, GraphStage, HirNodeId, Shape, hir_to_graph};
+use rlx_ir::hir::{HirModule, HirOp};
+use rlx_ir::{Graph, GraphModule, GraphStage, HirNodeId, Op, Shape, hir_to_graph};
 
 use crate::context::{FlowCtx, FlowState};
 use crate::execution::ModelExecutionConfig;
@@ -130,6 +130,34 @@ impl ModelFlow {
         }
         for stage in &self.stages {
             value = stage.emit(&mut ctx, value)?;
+        }
+
+        // Second half of the decode CACHE CONTRACT check, which only the
+        // finished graph can answer.
+        //
+        // `BindDecodeInputsStage` verified "contract => the caches have a spare
+        // row". This verifies the other direction: "contract => some layer
+        // actually wrote into that spare row". A flow that declares the spare
+        // row while its layers still `concat` puts the new token at
+        // `past_len + 1` and leaves row `past_len` zero, so attention reads a
+        // zero row in the middle of the history — wrong logits, no error, every
+        // backend. It is the exact failure that made the in-place append dead
+        // code once already, and it is easy to reach by migrating a flow whose
+        // decode layer is crate-local and hand-rolls the `concat` (rlx-models'
+        // unlimited-ocr and voxtral-tts both do). Neither half can see it
+        // alone: the shapes are legal and the op is simply absent.
+        if let Some(past_len) = ctx.state.decode.as_ref().and_then(|d| d.past_len) {
+            let appends = ctx
+                .hir()
+                .nodes()
+                .iter()
+                .filter(|n| matches!(n.op, HirOp::Mir(Op::KvAppend { .. })))
+                .count();
+            anyhow::ensure!(
+                appends > 0,
+                "decode cache contract: flow `{}` bound past_len={past_len} (so its K/V caches                  carry a spare row) but the built graph contains no `Op::KvAppend` — the new                  token would be `concat`-ed at row past_len + 1, leaving row past_len zeroed                  mid-history. Route the decode layer's cache growth through                  `rlx_flow::blocks::append_kv_row` (it honours `DecodeBindings::past_len`), or                  bind with `bind_decode_inputs` and drop the spare row.",
+                self.name,
+            );
         }
 
         let primary = value.ok_or_else(|| anyhow::anyhow!("ModelFlow produced no output"))?;

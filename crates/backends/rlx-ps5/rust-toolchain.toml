@@ -1,0 +1,4 @@
+# Nightly for `-Zbuild-std` and `-Ztls-model=emulated` (see .cargo/config.toml).
+[toolchain]
+channel = "nightly"
+components = ["rust-src"]

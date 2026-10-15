@@ -801,11 +801,13 @@ missing_registry_dep_name() {
         | sed -E 's/no matching package named `([^`]+)`/\1/'
 }
 
-# True when cargo says this version was uploaded already.
+# True when cargo says this version was uploaded already. crates.io's current
+# wording is "crate version `X` is already uploaded" (400); older cargo / server
+# versions said "already exists".
 is_already_exists_error() {
     local err_file="$1"
     [[ -f "$err_file" ]] || return 1
-    grep -qiE 'already exists on crates\.io|already exists on the registry' "$err_file"
+    grep -qiE 'already exists on crates\.io|already exists on the registry|version `[^`]+` is already uploaded' "$err_file"
 }
 
 # Last HTTP status from a `status NNN` line in cargo/crates.io output (e.g. 429).

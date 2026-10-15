@@ -231,7 +231,7 @@ pub use hwinfo::{
 pub use hwprofile_select::{device_vram_bytes, fastest_device_with_vram};
 pub use kv_cache::LayerKvCache;
 pub use lm::{
-    ConfigSource, LmRunner, LmRunnerBuilder, MirostatMode, ModelRegistration,
+    ConfigSource, HostDriven, LmRunner, LmRunnerBuilder, MirostatMode, ModelRegistration,
     PACKED_GGUF_AUTO_THRESHOLD_BYTES, SampleOpts, WeightFormat, auto_runner_name,
     registered_models,
 };
@@ -340,6 +340,11 @@ pub use rlx_ir::{
     RngOptions, Shape, WeightBlock, apply_hir_extensions, register_hir_extension,
     registered_hir_extensions,
 };
+/// Number formats for [`CompileOptions::number_format`].
+pub use rlx_ir::{FloatFormat, FormatScaling, NumberFormat};
+/// The graph rewrite behind [`CompileOptions::number_format`], for callers that
+/// apply it to part of a graph themselves (a training forward before autodiff).
+pub use rlx_opt::rlx_compile::emulate_format;
 
 // Re-export proc macro
 pub use rlx_macros::pipeline_schedule;

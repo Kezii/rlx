@@ -10548,3 +10548,77 @@ pub(crate) fn encode_fused_swiglu(
         },
     );
 }
+
+#[repr(C)]
+struct RoundFmtParams {
+    n: u32,
+    last_dim: u32,
+    block: u32,
+    mode: u32,
+    man_bits: i32,
+    emin: i32,
+    emax: i32,
+    max_normal: f32,
+}
+
+/// `Op::RoundToFormat`: one thread per element, or per block in mode 2.
+#[allow(clippy::too_many_arguments)]
+///
+/// Each operand comes as its resolved `(buffer, byte offset)`: a weight-tagged
+/// offset lives in the separate weight buffer, not the activation arena.
+pub(crate) fn encode_round_to_format(
+    enc: &crate::mtl::ComputeCommandEncoderRef,
+    k: &crate::kernels::Kernels,
+    src: (&crate::mtl::Buffer, usize),
+    amax: Option<(&crate::mtl::Buffer, usize)>,
+    dst: (&crate::mtl::Buffer, usize),
+    n: u32,
+    last_dim: u32,
+    block: u32,
+    mode: u32,
+    format: rlx_ir::FloatFormat,
+) {
+    let last_dim = last_dim.max(1);
+    let p = RoundFmtParams {
+        n,
+        last_dim,
+        block: block.max(1),
+        mode,
+        man_bits: format.man_bits as i32,
+        emin: format.emin(),
+        emax: format.emax(),
+        max_normal: format.max_normal,
+    };
+    let threads = if mode == 2 {
+        (n / last_dim) * last_dim.div_ceil(p.block)
+    } else {
+        n
+    };
+    enc.set_compute_pipeline_state(&k.round_to_format);
+    enc.set_buffer(0, Some(src.0), src.1 as u64);
+    enc.set_buffer(1, Some(dst.0), dst.1 as u64);
+    // Unused unless mode 1; bind something valid either way.
+    let amax = amax.unwrap_or(src);
+    enc.set_buffer(2, Some(amax.0), amax.1 as u64);
+    enc.set_bytes(
+        3,
+        std::mem::size_of::<RoundFmtParams>() as u64,
+        &p as *const RoundFmtParams as *const _,
+    );
+    let tg_w = k
+        .round_to_format
+        .thread_execution_width()
+        .min(threads.max(1) as u64);
+    enc.dispatch_threads(
+        crate::mtl::MTLSize {
+            width: threads as u64,
+            height: 1,
+            depth: 1,
+        },
+        crate::mtl::MTLSize {
+            width: tg_w,
+            height: 1,
+            depth: 1,
+        },
+    );
+}

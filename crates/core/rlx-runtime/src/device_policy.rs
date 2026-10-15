@@ -181,6 +181,8 @@ pub fn advisory_capabilities(device: Device) -> crate::ExecutableCapabilities {
             clone: true,
             moe: true,
             persistent_handles: true,
+            gpu_handles: true,
+            kv_resident: true,
             typed_io: true,
             active_extent: true,
             ..C::NONE
@@ -230,7 +232,9 @@ pub fn advisory_capabilities(device: Device) -> crate::ExecutableCapabilities {
         Device::Gpu | Device::WebGpu => C {
             clone: true,
             gpu_handles: true,
-            kv_resident: true,
+            // Has the KV row FEED but not the row READ, so it does not meet the
+            // resident contract — see the note in `backend/wgpu_backend.rs`.
+            kv_resident: false,
             typed_io: true,
             active_extent: true,
             ..C::NONE

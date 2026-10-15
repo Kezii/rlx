@@ -47,7 +47,10 @@ pub mod escape;
 mod execution;
 mod extension;
 mod flow;
+#[cfg(feature = "formats")]
+pub mod formats;
 mod layer;
+pub mod packed_attn;
 mod plugin;
 mod profile;
 mod recipe;
@@ -100,7 +103,10 @@ pub use stream::{
     DualStreamStage, LoadStreamStage, StoreStreamStage, dual_stream_stage, id as stream_id,
 };
 pub use value::FlowValue;
-pub use weight::{MapWeights, WeightSource};
+pub use weight::{
+    Aliased, CloningSource, Fallback, MapWeights, Mapped, Prefixed, Renamed, TensorLookup, Tracked,
+    WeightReport, WeightSource, WeightSourceExt, missing_weight, transpose_2d,
+};
 
 use std::collections::HashMap;
 

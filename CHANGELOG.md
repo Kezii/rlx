@@ -25,6 +25,59 @@ release, rename `[Unreleased]` to the new version and add a fresh empty
 
 ### Added
 
+- **sccache for the MLX build (`rlx-mlx-sys`).** MLX's C++ and CUDA sources
+  now compile through sccache when it is installed, else ccache, on macOS,
+  iOS-family targets and Linux; `RLX_MLX_CCACHE=sccache|ccache|<path>|off`
+  chooses. Linux builds used no compiler cache at all before, although the
+  README said MLX picked up ccache by itself — so every new `OUT_DIR`
+  recompiled the CUDA kernels from scratch (~1 h).
+
+## [0.2.18] — 2026-10-15
+
+### Added
+
+- **Checkpoint files and adapters for flow weights (`rlx-flow`).** With the new
+  default-off `formats` feature, `formats::SafetensorsSource` (one file or a
+  directory of shards, memory-mapped; F16/BF16/F64/integer read as f32) and
+  `formats::GgufSource` (dequantized, or `.packed(true)` for `DequantMatMul`)
+  are `WeightSource`s, and `formats::open(path)` picks one by path. Without the
+  feature, `WeightSourceExt` (in the prelude) adds `CloningSource` (a
+  non-consuming source over any `TensorLookup`), `with_prefix` / `renamed`,
+  `alias` (tied weights), `map_tensors`, `or` (fallback source) and `tracked`
+  (served / missing / unused keys after a build), all passing packed weights
+  through. `WeightSource::keys` lists a source's tensors, and a missing key's
+  error names the closest ones (`missing_weight`). `tests/weight_formats.rs`
+  builds one projection from a GGUF file as F32 and packed and checks both
+  against a reference.
+
+- **`rlx_gguf::quant_scheme` (feature `ir`)** — the GGML type → `QuantScheme`
+  table, now in one place; `rlx_cpu::quant_scheme_for_ggml` forwards to it.
+  Without `ir`, rlx-gguf still has no rlx dependencies.
+
+- **`rlx-cpu` feature `int8-gemv` (default off):** int8 decode GEMVs (`m == 1`)
+  for Q4_K, Q5_K, Q6_K, Q8_0, Q4_0 and Q4_1 on x86-64 AVX2, after llama.cpp's
+  kernels; the activation is quantized to int8 (Q8_K or 32-blocks), so results
+  differ from the f32 path by that rounding. `RLX_Q4K_EXACT_GEMV` keeps Q4_K on
+  the exact f32-activation arm.
+
+- **`rlx-cpu` feature `portable-gemm` (default off):** without a BLAS, `m ≥ 8`
+  GEMMs go to the `gemm` crate's blocked kernels instead of the loop nest.
+
+- **Resident KV cache on CPU.** `rlx-runtime`'s CPU backend implements the
+  resident decode handles (`bind_gpu_handle`, `register_kv_row_feed`,
+  `feed_kv_row`, `read_output_row`); a bound KV handle stays in place in its
+  arena slot and only the new row is written per token. Guard:
+  `rlx-runtime/tests/cpu_resident_kv.rs`.
+
+- **Opt-in runtime flags:** `RLX_PACKED_LM_HEAD` (the flow's LM head reads the
+  packed `output.weight`, or the packed embedding table when tied, instead of an
+  F32 copy) and `RLX_CPU_EXEC_IN_POOL` (run each CPU schedule on a thread-pool
+  worker, so parallel kernels join by spinning instead of parking the caller).
+
+- **`rlx-ps5`** (standalone, not published): jailbroken-PS5 target bring-up —
+  `just ps5 setup|build|send|run`, a probe payload, a distributed-node payload,
+  and a platform seam for model payloads.
+
 - **Ternary (BitNet b1.58) weights, including quantization-aware training.**
   `rlx_ir::ternary` is the one definition training and export share: absmean
   weights (`γ = mean|W|`, codes `clamp(round(W/γ), −1, 1)`, per tensor by
@@ -83,6 +136,32 @@ release, rename `[Unreleased]` to the new version and add a fresh empty
 
 ### Changed
 
+- **MLX submodule bumped to v0.32.4** (from v0.32.2): upstream Metal fixes
+  that reach rlx-mlx — a fence deadlock, split-K quantized matmul (row count,
+  float32 partials), conv bounds and integer overflow, SDPA threadgroup size on
+  M1/M2, negative-stride scatter/SDPA-mask indexing. Both tracked patches in
+  `rlx-mlx-sys/patches/` apply unchanged; the metallib still carries the
+  target platform (iOS `82`, tvOS `83` at byte `0x0B`). rlx-mlx 196/196,
+  rlx-runtime with `mlx` 988 passed.
+
+- **Dependencies updated** to the latest versions compatible with the 1.89
+  MSRV (`CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo update`; the
+  workspace resolver is `2`, which is not MSRV-aware). `cargo +1.89.0 check
+  --workspace --all-targets` passes.
+
+- **Chat templates print booleans as `True` / `False`** (`rlx-text`, minijinja
+  ≥ 2.24, now required), as Python's Jinja2 — and so transformers — renders
+  them; a template that prints a bool used to emit `true` / `false`.
+
+- **x86-64 one-query decode attention** runs a task per head, skips masked keys
+  (dot, softmax chunk and V sum), and computes eight keys' dots per AVX register;
+  bit-identical to the scalar loop it replaces
+  (`decode_attention_lane_dots_are_bit_identical`,
+  `rlx-cpu/tests/decode_attention_m1.rs`).
+
+- **`MapWeights::has` reports the keys it holds** (it returned the trait
+  default, `false`).
+
 - **One decode KV-append decision for every model family.**
   `rlx_flow::blocks::kv_cache` holds it: `append_kv_row` emits the O(1)
   in-place `Op::KvAppend` when the flow bound its inputs with
@@ -123,6 +202,48 @@ release, rename `[Unreleased]` to the new version and add a fresh empty
   because a claim tested too narrowly is worse than no claim.
 
 ### Fixed
+
+- **MLX's CUDA backend now builds and runs on Linux** (`rlx-mlx-sys`; checked
+  on an RTX 3080 Ti, rlx-mlx 176/176 with `RLX_MLX_DEVICE=gpu`):
+  - Asking for CUDA (`RLX_MLX_CUDA=1` / feature `cuda`) without cuDNN or the
+    toolkit silently built the CPU-only MLX, whose tests then passed for a GPU
+    run that never happened; the build now names what is missing.
+  - Every `cargo:warning` of the build script went to stderr, where cargo
+    does not read them, so none was ever shown.
+  - `nvcc` is pinned to the probed toolkit (`CMAKE_CUDA_COMPILER`); a distro
+    `/usr/bin/nvcc` beside `/usr/local/cuda` was picked first.
+  - **Several CUDA toolkits on one machine:** the build picks one itself —
+    `RLX_MLX_CUDA_ROOT`, `CUDA_HOME`, `CUDA_PATH`, `/usr/local/cuda*` (newest
+    first), `/opt/cuda`, Ubuntu's split `nvidia-cuda-toolkit` (via a shim
+    root in `OUT_DIR`) — skipping versions MLX's `CMakeLists.txt` refuses
+    (13.1), and names its choice and what it skipped. Host compiler: the
+    toolkit's `bin/g++` wrapper, else the newest `g++-N` within the
+    toolkit's GCC limit, unless `CUDAHOSTCXX` is set. cuDNN from
+    `CUDNN_ROOT` / `CUDNN_PATH`, the toolkit, or the system dirs. MLX ≥
+    0.32.3's `cusolver` is linked.
+  - With NCCL installed (as in NVIDIA's CUDA images), MLX builds its NCCL
+    distributed backend and `libmlx.a` failed to link (`undefined reference
+    to ncclAllReduce`); the build now links the NCCL that MLX's CMake found.
+  - Patch 0003: MLX's NVRTC JIT defaults to the build's toolkit headers and
+    the CCCL copy MLX installs, instead of `/usr/local/cuda` — no
+    `CUDA_HOME` needed at run time.
+  - `rlx-mlx-sys/docker/cuda_matrix.py` checks toolkit selection and the full
+    MLX CUDA compile + link on NVIDIA's CUDA 12.8 / 13.0 / 13.1 / 13.2 images
+    (no GPU needed).
+
+- **Grouped conv weight gradients with stride > 1 were wrong on MLX-CUDA**
+  (max |Δ| ≈ 1 on `conv2d_backward_weight_groups_3_stride2`; MLX's CUDA
+  backend mishandles a grouped conv with a dilated kernel). With the `cuda`
+  feature, rlx-mlx computes that case per group with ungrouped convs; CPU and
+  Metal builds are unchanged.
+
+- **Packed weights were dropped through `&mut` weight sources.** `impl
+  WeightSource for &mut T` forwarded only `take` and `has`, so through an
+  adapter over a `&mut dyn WeightSource` `take_packed` answered `None` and a
+  quantized model silently built as F32.
+
+- **No-BLAS `sgemm`/`sgemv`/`dgemm` with `beta == 0` leaked NaN** from the
+  output buffer (`0 · NaN`). Guard: `rlx-cpu/tests/sgemm_general_strided.rs`.
 
 - **2- and 4-bit FPGA exports computed wrong results.** The weight-byte lane
   select was combinational while the weight ROM reads a cycle late, so each MAC
@@ -166,7 +287,7 @@ release, rename `[Unreleased]` to the new version and add a fresh empty
   without a GPU feature no longer fails on them.
 
 - **The env-var registry had drifted by 15 reads.** `RLX_BLAS_ALIAS_CHECK`, seven
-  Metal knobs (small-m MPS routing and its trace, the share-driven weight split
+  Metal settings (small-m MPS routing and its trace, the share-driven weight split
   and its byte threshold, the three PTQ1_0 levers), five wgpu ones (the
   cooperative-matrix probe and its verbose mode, the feed trace, the two
   wide-GEMM pins) and `RLX_XDNA_AIECC_GET` were read by the code but absent from
@@ -190,6 +311,15 @@ release, rename `[Unreleased]` to the new version and add a fresh empty
   linked the private `crate::torch`. Both rendered as dead links on docs.rs, and
   both are what the new `just check-rustdoc` found once the phantom warnings were
   out of the way.
+
+### Performance
+
+- **Qwen3-0.6B decode on three AVX2 cores, no BLAS** (the PS5 build: rlx-cpu
+  `portable-gemm` + `int8-gemv` and the opt-in flags above), average tok/s
+  before → after, with a CPU-only llama.cpp on the same cores for reference:
+  Q4_K_M 11.0 → 80.5 (82.5), Q4_0 → 82.5 (88), Q5_K_M → 73.5 (75), Q6_K →
+  70.6 (73), Q8_0 → 61.6 (63). The int8 kernels alone run 1.5–4.4× the
+  previous ones per core; decode attention ~2×.
 
 ## [0.2.17] — 2026-10-03
 
@@ -4293,7 +4423,8 @@ HuggingFace reference), a high-level **`rlx::run`** runner API, a
 
 Initial release. Tracked at [git history root].
 
-[Unreleased]: https://github.com/MIT-RLX/rlx/compare/v0.2.17...HEAD
+[Unreleased]: https://github.com/MIT-RLX/rlx/compare/v0.2.18...HEAD
+[0.2.18]: https://github.com/MIT-RLX/rlx/compare/v0.2.17...v0.2.18
 [0.2.17]: https://github.com/MIT-RLX/rlx/compare/v0.2.16...v0.2.17
 [0.2.16]: https://github.com/MIT-RLX/rlx/compare/v0.2.15...v0.2.16
 [0.2.15]: https://github.com/MIT-RLX/rlx/compare/v0.2.14...v0.2.15
