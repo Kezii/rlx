@@ -35,7 +35,7 @@
 use crate::op::{Op, OpKind};
 
 /// Number of [`OpKind`] variants.
-pub const N_KINDS: usize = 187;
+pub const N_KINDS: usize = 188;
 
 /// Static properties of an op, independent of its operands or attributes.
 ///
@@ -141,6 +141,7 @@ impl OpKind {
         OpKind::FakeQuantizeLSQBackwardX,
         OpKind::FakeQuantizeLSQBackwardScale,
         OpKind::RoundToFormat,
+        OpKind::DoubleSingle,
         OpKind::Binary,
         OpKind::Compare,
         OpKind::Where,
@@ -387,6 +388,7 @@ impl OpKind {
             | FakeQuantizeLSQBackwardX
             | FakeQuantizeLSQBackwardScale
             | RoundToFormat
+            | DoubleSingle
             | TransformRegion
             | Cholesky
             | TriangularSolve

@@ -340,6 +340,7 @@ pub enum OpKind {
     FakeQuantizeLSQBackwardX,
     FakeQuantizeLSQBackwardScale,
     RoundToFormat,
+    DoubleSingle,
     Binary,
     Compare,
     Where,
@@ -843,6 +844,11 @@ pub enum Op {
         format: crate::number_format::FloatFormat,
         scaling: crate::number_format::FormatScaling,
     },
+
+    /// Double-single (df) arithmetic: f64 values carried as F32 `(hi, lo)`
+    /// pairs in a trailing axis of 2, for backends without native f64. See
+    /// [`crate::double_single`]; produced by `rlx_compile::lower_f64`.
+    DoubleSingle(crate::double_single::DfOp),
 
     /// Learned Step Size Quantization (LSQ; Esser et al. 2020,
     /// `arXiv:1902.08153`). Like `FakeQuantize` but the per-channel
@@ -3107,6 +3113,7 @@ impl Op {
             Op::FakeQuantizeLSQBackwardX { .. } => OpKind::FakeQuantizeLSQBackwardX,
             Op::FakeQuantizeLSQBackwardScale { .. } => OpKind::FakeQuantizeLSQBackwardScale,
             Op::RoundToFormat { .. } => OpKind::RoundToFormat,
+            Op::DoubleSingle(_) => OpKind::DoubleSingle,
             Op::Binary(_) => OpKind::Binary,
             Op::Compare(_) => OpKind::Compare,
             Op::Where => OpKind::Where,
@@ -3393,6 +3400,7 @@ impl Op {
                 crate::number_format::FormatScaling::PerTensor => 2,
                 _ => 1,
             },
+            Op::DoubleSingle(df) => df.num_inputs(),
             Op::FakeQuantizeLSQBackwardX { .. } | Op::FakeQuantizeLSQBackwardScale { .. } => 3, // x, scale, dy
             Op::Binary(_)
             | Op::Compare(_)
@@ -3637,6 +3645,7 @@ impl std::fmt::Display for Op {
                     }
                 )
             }
+            Op::DoubleSingle(df) => write!(f, "{df}"),
             Op::FakeQuantizeLSQ { bits, axis } => match axis {
                 None => write!(f, "fake_quant_lsq(bits={bits})"),
                 Some(d) => write!(f, "fake_quant_lsq(bits={bits},axis={d})"),

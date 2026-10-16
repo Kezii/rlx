@@ -68,6 +68,7 @@ pub fn sample(kind: OpKind) -> Op {
             format: crate::number_format::FloatFormat::F16,
             scaling: crate::number_format::FormatScaling::None,
         },
+        OpKind::DoubleSingle => Op::DoubleSingle(crate::double_single::DfOp::Add),
         OpKind::FakeQuantizeLSQ => Op::FakeQuantizeLSQ {
             bits: 1,
             axis: None,
@@ -717,6 +718,7 @@ pub const ALL_KINDS: &[OpKind] = &[
     OpKind::FakeQuantizeLSQBackwardX,
     OpKind::FakeQuantizeLSQBackwardScale,
     OpKind::RoundToFormat,
+    OpKind::DoubleSingle,
     OpKind::Binary,
     OpKind::Compare,
     OpKind::Where,

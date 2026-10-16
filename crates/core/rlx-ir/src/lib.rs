@@ -54,6 +54,7 @@ pub mod lowp_codec;
 pub mod measure;
 pub mod mir;
 pub mod module;
+pub mod double_single;
 pub mod number_format;
 pub mod numeric_check;
 pub mod nvfp4;
